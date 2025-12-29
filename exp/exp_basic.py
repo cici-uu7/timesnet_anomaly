@@ -12,6 +12,7 @@ class Exp_Basic(object):
         self.args = args
         self.model_dict = {
             'TimesNet': TimesNet,
+            'TimesNet_AD': TimesNet_AD,
             'Autoformer': Autoformer,
             'Transformer': Transformer,
             'Nonstationary_Transformer': Nonstationary_Transformer,
