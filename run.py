@@ -9,6 +9,7 @@ from exp.exp_anomaly_detection import Exp_Anomaly_Detection
 from exp.exp_classification import Exp_Classification
 from exp.exp_zero_shot_forecasting import Exp_Zero_Shot_Forecast
 from utils.print_args import print_args
+from exp.exp_timesnet_ad import Exp_TimesNet_AD
 import random
 import numpy as np
 
@@ -51,6 +52,7 @@ if __name__ == '__main__':
 
     # anomaly detection task
     parser.add_argument('--anomaly_ratio', type=float, default=0.25, help='prior anomaly ratio (%%)')
+    parser.add_argument('--k', type=float, default=3.0, help='Optimization factor')
 
     # model define
     parser.add_argument('--expand', type=int, default=2, help='expansion factor for Mamba')
@@ -184,7 +186,10 @@ if __name__ == '__main__':
     elif args.task_name == 'imputation':
         Exp = Exp_Imputation
     elif args.task_name == 'anomaly_detection':
-        Exp = Exp_Anomaly_Detection
+        if args.model == 'TimesNet_AD':
+            Exp = Exp_TimesNet_AD
+        else:
+            Exp = Exp_Anomaly_Detection
     elif args.task_name == 'classification':
         Exp = Exp_Classification
     elif args.task_name == 'zero_shot_forecast':
