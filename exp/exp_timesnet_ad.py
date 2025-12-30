@@ -77,7 +77,7 @@ class Exp_TimesNet_AD(Exp_Anomaly_Detection):
                 prior_loss = 0.0
 
                 # 遍历每个 Head 计算 KL 散度
-                for u in range(len(prior_attn)):
+                for u in range(prior_attn.shape[1]):
                     # 处理维度兼容性 (Batch, Heads, Length, Length)
                     if series_attn.dim() == 4:
                         s_attn = series_attn[:, u, :, :]
@@ -181,7 +181,7 @@ class Exp_TimesNet_AD(Exp_Anomaly_Detection):
 
                 # 计算关联差异 (Association Discrepancy)
                 score = torch.zeros(batch_x.shape[0], batch_x.shape[1]).to(self.device)
-                for u in range(len(prior_attn)):
+                for u in range(prior_attn.shape[1]):
                     if series_attn.dim() == 4:
                         s_attn = series_attn[:, u, :, :]
                         p_attn = prior_attn[:, u, :, :]
@@ -250,7 +250,7 @@ class Exp_TimesNet_AD(Exp_Anomaly_Detection):
 
         try:
             # 应用 Point Adjustment
-            final_pred_adjusted = adjustment(test_labels, final_pred)
+            _, final_pred_adjusted = adjustment(test_labels, final_pred)
         except Exception as e:
             print(f"Warning: Point adjustment failed ({e}), utilizing raw predictions.")
             final_pred_adjusted = final_pred

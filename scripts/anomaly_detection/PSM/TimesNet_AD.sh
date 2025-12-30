@@ -28,7 +28,7 @@ python -u run.py \
   --top_k 3 \
   --anomaly_ratio 1 \
   --batch_size 128 \
-  --train_epochs 10 \
+  --train_epochs 5 \
   --learning_rate 0.0001 \
   --k 3.0 \
   --itr 1

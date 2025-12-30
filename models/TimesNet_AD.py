@@ -11,11 +11,11 @@ class Model(nn.Module):
         self.pred_len = configs.pred_len
         self.output_attention = configs.output_attention
 
-        # 1. 实例化原版 TimesNet
+        # 1. 实例化原版 TimesNet 作为骨干网络
         self.timesnet = TimesNetOriginal(configs)
 
         # 2. 定义关联差异模块
-        # 我们使用 Concat(TimesNet特征, 原始Embedding)，所以输入维度是 d_model * 2
+        # 输入是 [TimesNet深层特征; 原始Embedding]，所以维度是 d_model * 2
         self.fusion_dim = configs.d_model * 2
         self.anomaly_block = AnomalyBlock(
             d_model=self.fusion_dim,
@@ -25,34 +25,35 @@ class Model(nn.Module):
             dropout=configs.dropout
         )
 
-        # 3. 投影层：把融合后的特征映射回输出维度 (c_out)
+        # 3. 投影层：映射回输出维度
         self.projection = nn.Linear(self.fusion_dim, configs.c_out)
 
     def forward(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask=None):
-        # 步骤 A: 利用 TimesNet 提取深层特征
-        # enc_out: [B, L, d_model]
+        # 步骤 1: Embedding (直接复用 TimesNet 的 Embedding 层)
+        # enc_out: [Batch, Seq_Len, d_model]
         enc_out = self.timesnet.enc_embedding(x_enc, x_mark_enc)
-        raw_embedding = enc_out.clone()  # 备份原始 Embedding
 
-        # timesnet_feat: [B, L, d_model]
-        # 注意：TimesNet 的 encoder 可能返回 (x, attns) 元组，我们只需要 x
-        timesnet_out = self.timesnet.encoder(enc_out, x_mark_enc)
-        if isinstance(timesnet_out, tuple):
-            timesnet_feat = timesnet_out[0]
-        else:
-            timesnet_feat = timesnet_out
+        # 备份“浅层特征”用于后续拼接
+        raw_embedding = enc_out.clone()
 
-        # 步骤 B: 特征融合 (Concatenation)
-        # 将 "深层周期特征" 与 "浅层局部特征" 拼接，防止过平滑
+        # 步骤 2: TimesNet 特征提取 (手动遍历层，替代不存在的 .encoder)
+        # 参考 TimesNet.py 中的 anomaly_detection 方法逻辑
+        timesnet_feat = enc_out
+        for i in range(self.timesnet.layer):
+            # 通过 TimesBlock 提取 2D 时序变化特征
+            timesnet_feat = self.timesnet.layer_norm(self.timesnet.model[i](timesnet_feat))
+
+        # 此时 timesnet_feat 是“深层特征”，维度 [Batch, Seq_Len, d_model]
+
+        # 步骤 3: 特征融合
+        # 拼接深层特征和浅层特征
         combined_feat = torch.cat([timesnet_feat, raw_embedding], dim=-1)
 
-        # 步骤 C: 关联差异计算
-        # out: [B, L, 2*d_model]
-        # series_attn, prior_attn: [B, n_heads, L, L]
+        # 步骤 4: 关联差异计算 (Anomaly Attention)
+        # out: [Batch, Seq_Len, 2*d_model]
         out, series_attn, prior_attn = self.anomaly_block(combined_feat)
 
-        # 步骤 D: 重构输出
+        # 步骤 5: 重构输出
         output = self.projection(out)
 
-        # 训练和测试时都需要 Attention Map 来计算差异损失
         return output, series_attn, prior_attn
