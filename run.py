@@ -53,6 +53,7 @@ if __name__ == '__main__':
     # anomaly detection task
     parser.add_argument('--anomaly_ratio', type=float, default=0.25, help='prior anomaly ratio (%%)')
     parser.add_argument('--k', type=float, default=3.0, help='Optimization factor')
+    parser.add_argument('--output_attention', action='store_true', help='whether to output attention in encoder')
 
     # model define
     parser.add_argument('--expand', type=int, default=2, help='expansion factor for Mamba')
