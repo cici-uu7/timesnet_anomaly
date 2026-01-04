@@ -1,111 +1,69 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import numpy as np
 import math
-
-
-class AnomalyAttention(nn.Module):
-    def __init__(self, win_size, mask_flag=True, scale=None, attention_dropout=0.0, output_attention=False):
-        super(AnomalyAttention, self).__init__()
-        self.scale = scale
-        self.mask_flag = mask_flag
-        self.output_attention = output_attention
-        self.dropout = nn.Dropout(attention_dropout)
-        self.window_size = win_size
-        # 初始化距离矩阵，用于计算高斯核
-        self.distances = torch.zeros((self.window_size, self.window_size)).cuda()
-        for i in range(self.window_size):
-            for j in range(self.window_size):
-                self.distances[i][j] = abs(i - j)
-
-    def forward(self, queries, keys, values, sigma, attn_mask, tau=None, delta=None):
-        B, L, H, E = queries.shape
-        _, S, _, D = values.shape
-        scale = self.scale or 1. / math.sqrt(E)
-
-        # 1. 计算 Standard Self-Attention (Series Association)
-        scores = torch.einsum("blhe,bshe->bhls", queries, keys)
-        if self.mask_flag:
-            if attn_mask is None:
-                attn_mask = torch.triu(torch.ones(L, S), diagonal=1).bool().to(queries.device)
-            scores.masked_fill_(attn_mask, -np.inf)
-
-        attn = scale * scores
-        series_attn_probs = self.dropout(torch.softmax(attn, dim=-1))
-
-        # 2. 计算 Gaussian Kernel (Prior Association)
-        # sigma: [B, L, H] -> [B, H, L, 1] 为了广播机制
-        sigma = sigma.transpose(1, 2).contiguous()  # [B, H, L]
-        window_size = self.window_size
-        self.distances = self.distances.to(queries.device)
-
-        # 扩展维度以匹配 [B, H, L, L]
-        # distances: [L, L] -> [1, 1, L, L] -> [B, H, L, L]
-        dist = self.distances.unsqueeze(0).unsqueeze(0).repeat(B, H, 1, 1)
-
-        # sigma: [B, H, L] -> [B, H, L, 1]
-        sigma_expanded = sigma.unsqueeze(-1)
-
-        # 高斯分布公式计算
-        prior_attn_probs = 1.0 / (math.sqrt(2 * math.pi) * sigma_expanded) * torch.exp(
-            -dist ** 2 / (2 * sigma_expanded ** 2))
-
-        # 归一化 Prior
-        prior_attn_probs = prior_attn_probs / (prior_attn_probs.sum(-1, keepdim=True) + 1e-10)
-
-        # 3. 计算输出
-        V = values
-        output = torch.einsum("bhls,bshd->blhd", series_attn_probs, V)
-
-        return output, series_attn_probs, prior_attn_probs
 
 
 class AnomalyBlock(nn.Module):
     def __init__(self, d_model, n_heads, win_size, d_ff, dropout=0.05):
         super(AnomalyBlock, self).__init__()
-        self.attention = AnomalyAttention(win_size)
-        self.norm1 = nn.LayerNorm(d_model)
-        self.norm2 = nn.LayerNorm(d_model)
-        self.dropout = nn.Dropout(dropout)
-
-        # 生成 Q, K, V 和 Sigma
-        self.linear_q = nn.Linear(d_model, d_model)
-        self.linear_k = nn.Linear(d_model, d_model)
-        self.linear_v = nn.Linear(d_model, d_model)
-        self.linear_sigma = nn.Linear(d_model, n_heads)  # 为每个 Head 学习一个 sigma
+        d_keys = d_model // n_heads
 
         self.n_heads = n_heads
-        self.d_keys = d_model // n_heads
+        self.d_keys = d_keys
 
-        # FFN
-        self.conv1 = nn.Conv1d(d_model, d_ff, kernel_size=1)
-        self.conv2 = nn.Conv1d(d_ff, d_model, kernel_size=1)
-        self.activation = F.gelu
+        # Series Branch 的投影层：负责处理 x_series (TimesNet特征)
+        self.linear_q = nn.Linear(d_model, n_heads * d_keys)
+        self.linear_k = nn.Linear(d_model, n_heads * d_keys)
+        self.linear_v = nn.Linear(d_model, n_heads * d_keys)
 
-    def forward(self, x):
-        # x: [B, L, D]
-        B, L, D = x.shape
+        # Prior Branch 的投影层：负责处理 x_prior (原始Embedding)
+        self.linear_sigma = nn.Linear(d_model, n_heads)
 
-        # 投影生成 Q, K, V
-        q = self.linear_q(x).view(B, L, self.n_heads, self.d_keys)
-        k = self.linear_k(x).view(B, L, self.n_heads, self.d_keys)
-        v = self.linear_v(x).view(B, L, self.n_heads, self.d_keys)
+        self.out_layer = nn.Linear(n_heads * d_keys, d_model)
+        self.dropout = nn.Dropout(dropout)
 
-        # 生成 Sigma (确保为正数)
-        sigma = torch.sigmoid(self.linear_sigma(x)) + 1e-6
+    # 核心修改点：接收 x_series 和 x_prior 两个输入
+    def forward(self, x_series, x_prior):
+        B, L, _ = x_series.shape
 
-        # 计算 Attention
-        new_x, series_attn, prior_attn = self.attention(q, k, v, sigma, attn_mask=None)
-        new_x = new_x.reshape(B, L, D)
+        # 1. Series Branch: 使用 TimesNet 深层特征生成 Q, K, V
+        # 目的：捕捉长距离依赖和周期性 (Global)
+        q = self.linear_q(x_series).view(B, L, self.n_heads, self.d_keys)
+        k = self.linear_k(x_series).view(B, L, self.n_heads, self.d_keys)
+        v = self.linear_v(x_series).view(B, L, self.n_heads, self.d_keys)
 
-        # 残差连接 1
-        x = x + self.dropout(new_x)
-        y = x = self.norm1(x)
+        # 2. Prior Branch: 使用 原始/浅层特征生成 Sigma
+        # 目的：专注于局部连续性 (Local)，不受深层特征干扰
+        sigma = self.linear_sigma(x_prior).view(B, L, self.n_heads)
+        sigma = torch.sigmoid(sigma) + 1e-6  # 确保 sigma > 0
 
-        # FFN 部分
-        y = self.dropout(self.activation(self.conv1(y.transpose(-1, 1))))
-        y = self.dropout(self.conv2(y).transpose(-1, 1))
+        # 3. 计算 Series Association (Standard Attention)
+        scale = self.d_keys ** -0.5
+        series_attn = torch.einsum("blhd,bshd->bhls", q, k) * scale
+        series_attn = torch.softmax(series_attn, dim=-1)
 
-        # 残差连接 2
-        return self.norm2(x + y), series_attn, prior_attn
+        # 4. 计算 Prior Association (Gaussian Kernel)
+        sigma = sigma.permute(0, 2, 1).contiguous().float()  # [B, H, L]
+        prior_attn = self._calculate_prior_association(sigma, L)
+
+        # 5. 重构输出 (使用 Series 的 V)
+        weighted_value = torch.einsum("bhls,bshd->blhd", series_attn, v)
+        out = weighted_value.reshape(B, L, -1)
+        out = self.out_layer(out)
+
+        return out, series_attn, prior_attn
+
+    def _calculate_prior_association(self, sigma, L):
+        # 高斯核计算逻辑
+        # 这里的逻辑是动态生成的，虽然有一点点算力浪费，但适应性强（不用管 Window Size 变化）
+        B, H, _ = sigma.shape
+        x_indices = torch.arange(L).to(sigma.device).unsqueeze(0).unsqueeze(0).expand(B, H, L)
+        mean = x_indices
+
+        # 计算高斯分布：exp(-(x - mu)^2 / 2sigma^2)
+        # 注意 unsqueeze 是为了广播：[B, H, L, 1] vs [B, H, 1, L] -> [B, H, L, L]
+        gaussian = torch.exp(-((x_indices.unsqueeze(-1) - mean.unsqueeze(2)) ** 2) / (2 * (sigma.unsqueeze(2) ** 2)))
+
+        # 归一化，使其成为概率分布 (Sum=1)
+        gaussian = gaussian / (torch.sum(gaussian, dim=-1).unsqueeze(-1) + 1e-5)
+        return gaussian
