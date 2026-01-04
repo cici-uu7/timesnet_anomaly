@@ -86,27 +86,25 @@ class Exp_TimesNet_AD(Exp_Anomaly_Detection):
                         s_attn = series_attn
                         p_attn = prior_attn
 
-                    # Series Loss: Series 逼近 Prior
-                    series_loss += torch.mean(self.my_kl_loss(p_attn, s_attn.detach() + 1e-5)) + \
-                                   torch.mean(self.my_kl_loss(s_attn.detach() + 1e-5, p_attn))
+                    # Series Loss: Series 逼近 Prior (Prior 作为目标，需要 detach)
+                    # KL(Series || Prior) - 让 Series 学习 Prior 的局部模式
+                    series_loss += torch.mean(self.my_kl_loss(s_attn, p_attn.detach()))
 
-                    # Prior Loss: Prior 逼近 Series (反向优化)
-                    prior_loss += torch.mean(self.my_kl_loss(p_attn, s_attn.detach() + 1e-5)) + \
-                                  torch.mean(self.my_kl_loss(s_attn.detach() + 1e-5, p_attn))
+                    # Prior Loss: Prior 远离 Series (Series 作为目标，需要 detach)
+                    # KL(Prior || Series) - 让 Prior 保持高斯特性，不跟随 Series 的异常模式
+                    prior_loss += torch.mean(self.my_kl_loss(p_attn, s_attn.detach()))
 
-                series_loss = series_loss / len(prior_attn)
-                prior_loss = prior_loss / len(prior_attn)
+                series_loss = series_loss / prior_attn.shape[1]
+                prior_loss = prior_loss / prior_attn.shape[1]
 
-                # 优化策略
-                # 阶段 1: 最小化 Rec Loss 和 Series Loss (拉近 Series 到 Prior)
-                loss1 = rec_loss - k_val * series_loss
-
-                # 阶段 2: 最小化 Prior Loss (其实是最大化差异，因为 loss2 单独 backward)
-                loss2 = k_val * prior_loss
+                # Minimax 策略组合
+                # Phase 1: 最小化 Series Loss - Series 逼近 Prior
+                # Phase 2: 最大化 Prior Loss (通过负号) - Prior 远离 Series
+                # 最终效果：Series 和 Prior 保持适度差异，异常点会放大这个差异
+                loss = rec_loss + k_val * series_loss - k_val * prior_loss
 
                 # 反向传播
-                loss1.backward(retain_graph=True)
-                loss2.backward()
+                loss.backward()
 
                 optimizer.step()
 

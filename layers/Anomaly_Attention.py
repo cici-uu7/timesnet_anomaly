@@ -16,25 +16,25 @@ class AnomalyBlock(nn.Module):
         self.linear_k = nn.Linear(d_model, n_heads * d_keys)
         self.linear_v = nn.Linear(d_model, n_heads * d_keys)
 
-        # Prior Branch 的投影层：负责处理 x_prior (原始Embedding)
+        # Prior Branch 的投影层：从深层特征生成 Sigma
         self.linear_sigma = nn.Linear(d_model, n_heads)
 
         self.out_layer = nn.Linear(n_heads * d_keys, d_model)
         self.dropout = nn.Dropout(dropout)
 
-    # 核心修改点：接收 x_series 和 x_prior 两个输入
-    def forward(self, x_series, x_prior):
-        B, L, _ = x_series.shape
+    # 核心修改点：只接收一个输入（深层特征）
+    def forward(self, x):
+        B, L, _ = x.shape
 
-        # 1. Series Branch: 使用 TimesNet 深层特征生成 Q, K, V
+        # 1. Series Branch: 使用深层特征生成 Q, K, V
         # 目的：捕捉长距离依赖和周期性 (Global)
-        q = self.linear_q(x_series).view(B, L, self.n_heads, self.d_keys)
-        k = self.linear_k(x_series).view(B, L, self.n_heads, self.d_keys)
-        v = self.linear_v(x_series).view(B, L, self.n_heads, self.d_keys)
+        q = self.linear_q(x).view(B, L, self.n_heads, self.d_keys)
+        k = self.linear_k(x).view(B, L, self.n_heads, self.d_keys)
+        v = self.linear_v(x).view(B, L, self.n_heads, self.d_keys)
 
-        # 2. Prior Branch: 使用 原始/浅层特征生成 Sigma
-        # 目的：专注于局部连续性 (Local)，不受深层特征干扰
-        sigma = self.linear_sigma(x_prior).view(B, L, self.n_heads)
+        # 2. Prior Branch: 使用同样的深层特征生成 Sigma
+        # 目的：根据上下文动态调整高斯分布的方差，保持局部连续性
+        sigma = self.linear_sigma(x).view(B, L, self.n_heads)
         sigma = torch.sigmoid(sigma) + 1e-6  # 确保 sigma > 0
 
         # 3. 计算 Series Association (Standard Attention)
