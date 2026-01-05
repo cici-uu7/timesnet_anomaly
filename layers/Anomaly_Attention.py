@@ -4,49 +4,50 @@ import math
 
 
 class AnomalyBlock(nn.Module):
-    def __init__(self, d_model, n_heads, win_size, d_ff, dropout=0.05):
+    def __init__(self, d_model, n_heads, win_size, d_ff, dropout=0.05, sigma_init_factor=5.0):
         super(AnomalyBlock, self).__init__()
         d_keys = d_model // n_heads
 
         self.n_heads = n_heads
         self.d_keys = d_keys
+        self.win_size = win_size
 
         # Series Branch 的投影层：负责处理 x_series (TimesNet特征)
         self.linear_q = nn.Linear(d_model, n_heads * d_keys)
         self.linear_k = nn.Linear(d_model, n_heads * d_keys)
         self.linear_v = nn.Linear(d_model, n_heads * d_keys)
 
-        # Prior Branch 的投影层：从深层特征生成 Sigma
-        self.linear_sigma = nn.Linear(d_model, n_heads)
+        # Prior Branch: 使用可学习但数据独立的参数
+        # 每个head学习一个固定的sigma值(基于窗口大小)
+        # 初始化为合理的局部窗口大小
+        init_sigma = torch.ones(n_heads) * (win_size / sigma_init_factor)  # 可配置的初始化因子
+        self.prior_sigma = nn.Parameter(init_sigma)
 
         self.out_layer = nn.Linear(n_heads * d_keys, d_model)
         self.dropout = nn.Dropout(dropout)
 
-    # 核心修改点：只接收一个输入（深层特征）
     def forward(self, x):
         B, L, _ = x.shape
 
         # 1. Series Branch: 使用深层特征生成 Q, K, V
-        # 目的：捕捉长距离依赖和周期性 (Global)
+        # 目的：捕捉长距离依赖和周期性 (Global, Data-dependent)
         q = self.linear_q(x).view(B, L, self.n_heads, self.d_keys)
         k = self.linear_k(x).view(B, L, self.n_heads, self.d_keys)
         v = self.linear_v(x).view(B, L, self.n_heads, self.d_keys)
 
-        # 2. Prior Branch: 使用同样的深层特征生成 Sigma
-        # 目的：根据上下文动态调整高斯分布的方差，保持局部连续性
-        sigma = self.linear_sigma(x).view(B, L, self.n_heads)
-        sigma = torch.sigmoid(sigma) + 1e-6  # 确保 sigma > 0
-
-        # 3. 计算 Series Association (Standard Attention)
+        # 2. 计算 Series Association (Standard Attention)
         scale = self.d_keys ** -0.5
         series_attn = torch.einsum("blhd,bshd->bhls", q, k) * scale
         series_attn = torch.softmax(series_attn, dim=-1)
 
-        # 4. 计算 Prior Association (Gaussian Kernel)
-        sigma = sigma.permute(0, 2, 1).contiguous().float()  # [B, H, L]
+        # 3. Prior Branch: 使用固定(可学习但数据独立)的 Sigma
+        # 目的：提供局部平滑的先验分布，作为对比基准
+        # Sigma 不依赖输入数据，只依赖位置关系
+        sigma = torch.abs(self.prior_sigma) + 1e-6  # 确保 sigma > 0, [H]
+        sigma = sigma.unsqueeze(0).expand(B, -1)  # [B, H]
         prior_attn = self._calculate_prior_association(sigma, L)
 
-        # 5. 重构输出 (使用 Series 的 V)
+        # 4. 重构输出 (使用 Series 的 V)
         weighted_value = torch.einsum("bhls,bshd->blhd", series_attn, v)
         out = weighted_value.reshape(B, L, -1)
         out = self.out_layer(out)
@@ -54,16 +55,32 @@ class AnomalyBlock(nn.Module):
         return out, series_attn, prior_attn
 
     def _calculate_prior_association(self, sigma, L):
-        # 高斯核计算逻辑
-        # 这里的逻辑是动态生成的，虽然有一点点算力浪费，但适应性强（不用管 Window Size 变化）
-        B, H, _ = sigma.shape
-        x_indices = torch.arange(L).to(sigma.device).unsqueeze(0).unsqueeze(0).expand(B, H, L)
-        mean = x_indices
+        """
+        计算基于固定高斯核的 Prior Association
+        Args:
+            sigma: [B, H] - 每个head的固定方差参数
+            L: int - 序列长度
+        Returns:
+            prior_attn: [B, H, L, L] - Prior attention矩阵
+        """
+        B, H = sigma.shape
+        device = sigma.device
 
-        # 计算高斯分布：exp(-(x - mu)^2 / 2sigma^2)
-        # 注意 unsqueeze 是为了广播：[B, H, L, 1] vs [B, H, 1, L] -> [B, H, L, L]
-        gaussian = torch.exp(-((x_indices.unsqueeze(-1) - mean.unsqueeze(2)) ** 2) / (2 * (sigma.unsqueeze(2) ** 2)))
+        # 创建位置索引 [L]
+        positions = torch.arange(L, dtype=torch.float32, device=device)
 
-        # 归一化，使其成为概率分布 (Sum=1)
-        gaussian = gaussian / (torch.sum(gaussian, dim=-1).unsqueeze(-1) + 1e-5)
-        return gaussian
+        # 计算位置差异矩阵 [L, L]
+        # distances[i, j] = |i - j|
+        distances = torch.abs(positions.unsqueeze(0) - positions.unsqueeze(1))
+
+        # 扩展维度以匹配 batch 和 heads [B, H, L, L]
+        distances = distances.unsqueeze(0).unsqueeze(0).expand(B, H, L, L)
+        sigma_expanded = sigma.unsqueeze(-1).unsqueeze(-1)  # [B, H, 1, 1]
+
+        # 高斯核: exp(-(distance)^2 / (2 * sigma^2))
+        prior_attn = torch.exp(-(distances ** 2) / (2 * sigma_expanded ** 2))
+
+        # 归一化为概率分布 (每行和为1)
+        prior_attn = prior_attn / (prior_attn.sum(dim=-1, keepdim=True) + 1e-8)
+
+        return prior_attn

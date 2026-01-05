@@ -14,13 +14,15 @@ class Model(nn.Module):
         # 1. 骨干网络
         self.timesnet = TimesNetOriginal(configs)
 
-        # 2. AnomalyBlock 初始化
+        # 2. AnomalyBlock 初始化 - 传入sigma初始化因子
+        sigma_init_factor = getattr(configs, 'sigma_init_factor', 5.0)  # 默认5.0
         self.anomaly_block = AnomalyBlock(
             d_model=configs.d_model,
             n_heads=configs.n_heads,
             win_size=configs.seq_len,
             d_ff=configs.d_ff,
-            dropout=configs.dropout
+            dropout=configs.dropout,
+            sigma_init_factor=sigma_init_factor
         )
 
         # 3. 投影层

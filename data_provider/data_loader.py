@@ -434,11 +434,11 @@ class PSMSegLoader(Dataset):
         data = np.nan_to_num(data)
         self.scaler.fit(data)
         data = self.scaler.transform(data)
-        
+
         test_data = test_df.values[:, 1:]
         test_data = np.nan_to_num(test_data)
         self.test = self.scaler.transform(test_data)
-        
+
         self.train = data
         data_len = len(self.train)
         self.val = self.train[(int)(data_len * 0.8):]
@@ -459,9 +459,11 @@ class PSMSegLoader(Dataset):
     def __getitem__(self, index):
         index = index * self.step
         if self.flag == "train":
-            return np.float32(self.train[index:index + self.win_size]), np.float32(self.test_labels[0:self.win_size])
+            # 修复：训练集不需要真实标签（无监督学习），返回空标签
+            return np.float32(self.train[index:index + self.win_size]), np.zeros(self.win_size, dtype=np.float32)
         elif (self.flag == 'val'):
-            return np.float32(self.val[index:index + self.win_size]), np.float32(self.test_labels[0:self.win_size])
+            # 修复：验证集也不需要真实标签
+            return np.float32(self.val[index:index + self.win_size]), np.zeros(self.win_size, dtype=np.float32)
         elif (self.flag == 'test'):
             return np.float32(self.test[index:index + self.win_size]), np.float32(
                 self.test_labels[index:index + self.win_size])

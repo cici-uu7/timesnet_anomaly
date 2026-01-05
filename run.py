@@ -52,7 +52,11 @@ if __name__ == '__main__':
 
     # anomaly detection task
     parser.add_argument('--anomaly_ratio', type=float, default=0.25, help='prior anomaly ratio (%%)')
-    parser.add_argument('--k', type=float, default=3.0, help='Optimization factor')
+    parser.add_argument('--k', type=float, default=3.0, help='Minimax strategy weight (k_val)')
+    parser.add_argument('--margin', type=float, default=0.5, help='Margin threshold for prior loss')
+    parser.add_argument('--alpha', type=float, default=0.5, help='Weight for reconstruction error in anomaly score')
+    parser.add_argument('--beta', type=float, default=0.5, help='Weight for association discrepancy in anomaly score')
+    parser.add_argument('--sigma_init_factor', type=float, default=5.0, help='Prior sigma initialization: win_size / factor')
     parser.add_argument('--output_attention', action='store_true', help='whether to output attention in encoder')
 
     # model define
@@ -156,7 +160,7 @@ if __name__ == '__main__':
                         help='DLinear: a linear layer for each variate(channel) individually')
 
     # TimeFilter
-    parser.add_argument('--alpha', type=float, default=0.1, help='KNN for Graph Construction')
+    parser.add_argument('--alpha2', type=float, default=0.1, help='KNN for Graph Construction')
     parser.add_argument('--top_p', type=float, default=0.5, help='Dynamic Routing in MoE')
     parser.add_argument('--pos', type=int, choices=[0, 1], default=1, help='Positional Embedding. Set pos to 0 or 1')
 

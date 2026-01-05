@@ -25,10 +25,21 @@ class Exp_TimesNet_AD(Exp_Anomaly_Detection):
         return model
 
     def my_kl_loss(self, p, q):
-        # 计算 KL 散度: KL(p || q)
-        # 加上微小常数防止 log(0)
-        res = p * (torch.log(p + 0.0001) - torch.log(q + 0.0001))
-        return torch.mean(torch.sum(res, dim=-1), dim=1)
+        """
+        计算 KL 散度: KL(p || q)
+        添加裁剪防止数值爆炸
+        """
+        # 裁剪概率值，防止log(0)和极端值
+        p = torch.clamp(p, min=1e-8, max=1.0)
+        q = torch.clamp(q, min=1e-8, max=1.0)
+
+        # KL散度计算
+        kl = p * (torch.log(p) - torch.log(q))
+
+        # 裁剪KL散度值，防止极端情况
+        kl = torch.clamp(kl, min=-10, max=10)
+
+        return torch.sum(kl, dim=-1)
 
     def train(self, setting):
         # 获取数据加载器
@@ -49,7 +60,8 @@ class Exp_TimesNet_AD(Exp_Anomaly_Detection):
 
         # 获取 k 参数 (默认为 3.0，如果 args 里没有则兜底)
         k_val = getattr(self.args, 'k', 3.0)
-        print(f"Training with Minimax Strategy, k={k_val}")
+        margin_val = getattr(self.args, 'margin', 0.5)
+        print(f"Training with Minimax Strategy, k={k_val}, margin={margin_val}")
 
         for epoch in range(self.args.train_epochs):
             iter_count = 0
@@ -67,7 +79,7 @@ class Exp_TimesNet_AD(Exp_Anomaly_Detection):
                 # 前向传播：返回重构结果、序列关联、先验关联
                 output, series_attn, prior_attn = self.model(batch_x, None, None, None)
 
-                # --- Minimax 策略核心 ---
+                # --- 改进的 Minimax 策略核心 ---
 
                 # 1. 计算重构损失 (MSE)
                 rec_loss = criterion(output, batch_x)
@@ -86,22 +98,28 @@ class Exp_TimesNet_AD(Exp_Anomaly_Detection):
                         s_attn = series_attn
                         p_attn = prior_attn
 
-                    # Series Loss: Series 逼近 Prior (Prior 作为目标，需要 detach)
-                    # KL(Series || Prior) - 让 Series 学习 Prior 的局部模式
-                    series_loss += torch.mean(self.my_kl_loss(s_attn, p_attn.detach()))
+                    # Series Loss: 让 Series 逼近 Prior (学习先验的局部平滑性)
+                    # KL(Series || Prior) - 正常数据应该符合局部平滑假设
+                    series_loss += torch.mean(self.my_kl_loss(s_attn, p_attn))
 
-                    # Prior Loss: Prior 远离 Series (Series 作为目标，需要 detach)
-                    # KL(Prior || Series) - 让 Prior 保持高斯特性，不跟随 Series 的异常模式
-                    prior_loss += torch.mean(self.my_kl_loss(p_attn, s_attn.detach()))
+                    # Prior Loss: 衡量 Prior 与 Series 的差异程度
+                    # 不使用detach，让模型学习调整prior_sigma参数
+                    # 但添加停止梯度的上限，避免Prior过度适应数据
+                    prior_loss += torch.mean(self.my_kl_loss(p_attn, s_attn))
 
                 series_loss = series_loss / prior_attn.shape[1]
                 prior_loss = prior_loss / prior_attn.shape[1]
 
-                # Minimax 策略组合
-                # Phase 1: 最小化 Series Loss - Series 逼近 Prior
-                # Phase 2: 最大化 Prior Loss (通过负号) - Prior 远离 Series
-                # 最终效果：Series 和 Prior 保持适度差异，异常点会放大这个差异
-                loss = rec_loss + k_val * series_loss - k_val * prior_loss
+                # 改进的 Minimax 策略:
+                # - Series 逼近 Prior (最小化 series_loss)
+                # - Prior 保持适度差异 (使用margin loss而非直接最大化)
+                #
+                # 使用 margin-based loss: max(0, margin - prior_loss)
+                # 只有当prior_loss小于margin时才惩罚(鼓励保持一定差异)
+                prior_margin_loss = torch.clamp(margin_val - prior_loss, min=0)
+
+                # 最终损失: 重构 + Series学习 + Prior保持差异
+                loss = rec_loss + k_val * series_loss + k_val * prior_margin_loss
 
                 # 反向传播
                 loss.backward()
@@ -159,14 +177,17 @@ class Exp_TimesNet_AD(Exp_Anomaly_Detection):
         self.model.load_state_dict(torch.load(os.path.join('./checkpoints/' + setting, 'checkpoint.pth')))
         self.model.eval()
 
-        attens_energy = []
+        # 用于存储重构误差和关联差异（分开存储，后续归一化）
+        reconstruction_errors = []
+        association_discrepancies = []
+
         folder_path = './test_results/' + setting + '/'
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
 
         criterion = nn.MSELoss(reduction='none')
 
-        # 1. 推理阶段：计算异常得分
+        # 1. 推理阶段：计算重构误差和关联差异
         with torch.no_grad():
             for i, (batch_x, _) in enumerate(test_loader):
                 batch_x = batch_x.float().to(self.device)
@@ -175,33 +196,53 @@ class Exp_TimesNet_AD(Exp_Anomaly_Detection):
                 output, series_attn, prior_attn = self.model(batch_x, None, None, None)
 
                 # 计算重构误差 (Squared Error) -> [B, L]
-                rec_loss = torch.mean(criterion(output, batch_x), dim=-1)
+                rec_error = torch.mean(criterion(output, batch_x), dim=-1)
 
                 # 计算关联差异 (Association Discrepancy)
-                score = torch.zeros(batch_x.shape[0], batch_x.shape[1]).to(self.device)
+                assoc_disc = torch.zeros(batch_x.shape[0], batch_x.shape[1]).to(self.device)
                 for u in range(prior_attn.shape[1]):
                     if series_attn.dim() == 4:
-                        s_attn = series_attn[:, u, :, :]
-                        p_attn = prior_attn[:, u, :, :]
+                        s_attn = series_attn[:, u, :, :]  # [B, L, L]
+                        p_attn = prior_attn[:, u, :, :]   # [B, L, L]
                     else:
                         s_attn = series_attn
                         p_attn = prior_attn
 
-                    # 计算对称 KL 散度
-                    score += torch.mean(self.my_kl_loss(p_attn, s_attn), dim=-1) + \
-                             torch.mean(self.my_kl_loss(s_attn, p_attn), dim=-1)
+                    # 计算对称 KL 散度（裁剪后）
+                    # my_kl_loss 返回 [B, L]，对每个时间步i，计算其与所有其他时间步的KL散度之和
+                    kl_ps = self.my_kl_loss(p_attn, s_attn)  # [B, L]
+                    kl_sp = self.my_kl_loss(s_attn, p_attn)  # [B, L]
 
-                score = score / len(prior_attn)
+                    # 直接累加，维度已经是 [B, L]
+                    assoc_disc += kl_ps + kl_sp
 
-                # 组合得分: 重构误差 * 关联差异 (放大异常)
-                det_score = rec_loss * score
+                assoc_disc = assoc_disc / prior_attn.shape[1]
 
-                attens_energy.append(det_score.detach().cpu().numpy())
+                reconstruction_errors.append(rec_error.detach().cpu().numpy())
+                association_discrepancies.append(assoc_disc.detach().cpu().numpy())
 
-        # 2. 数据后处理
+        # 2. 数据后处理和归一化
         # 拼接所有 Batch
-        attens_energy = np.concatenate(attens_energy, axis=0).reshape(-1)
-        test_energy = np.array(attens_energy)
+        reconstruction_errors = np.concatenate(reconstruction_errors, axis=0).reshape(-1)
+        association_discrepancies = np.concatenate(association_discrepancies, axis=0).reshape(-1)
+
+        # 归一化处理（Z-score标准化）
+        rec_mean, rec_std = reconstruction_errors.mean(), reconstruction_errors.std()
+        assoc_mean, assoc_std = association_discrepancies.mean(), association_discrepancies.std()
+
+        rec_norm = (reconstruction_errors - rec_mean) / (rec_std + 1e-8)
+        assoc_norm = (association_discrepancies - assoc_mean) / (assoc_std + 1e-8)
+
+        # 加权组合（可调参数）
+        # alpha: 重构误差权重, beta: 关联差异权重
+        alpha = getattr(self.args, 'alpha', 0.5)
+        beta = getattr(self.args, 'beta', 0.5)
+        print(f"Anomaly Score Weighting: alpha={alpha}, beta={beta}")
+        test_energy = alpha * rec_norm + beta * assoc_norm
+
+        # 保存未归一化的原始数据用于分析
+        np.save(folder_path + 'reconstruction_errors.npy', reconstruction_errors)
+        np.save(folder_path + 'association_discrepancies.npy', association_discrepancies)
 
         # 获取 Ground Truth 标签
         test_labels = test_loader.dataset.test_labels
@@ -219,9 +260,11 @@ class Exp_TimesNet_AD(Exp_Anomaly_Detection):
         np.save(folder_path + 'anomaly_score.npy', test_energy)
         np.save(folder_path + 'test_labels.npy', test_labels)
 
-        # 3. 阈值搜索与评估 (Threshold Search)
-        # 使用暴力搜索寻找最佳 F1 的阈值 (Standard Protocol)
-        threshs = np.linspace(test_energy.min(), test_energy.max(), 100)
+        # 3. 阈值搜索与评估 (Improved Threshold Search)
+        # 使用百分位数范围而非min/max，更稳健
+        percentiles = np.linspace(1, 99, 100)
+        threshs = np.percentile(test_energy, percentiles)
+
         best_f1 = -1
         best_precision = -1
         best_recall = -1
@@ -240,7 +283,8 @@ class Exp_TimesNet_AD(Exp_Anomaly_Detection):
                 best_recall = recall
                 best_thresh = thresh
 
-        print(f"Best Threshold (Raw Search): {best_thresh}")
+        print(f"Best Threshold (Percentile Search): {best_thresh}")
+        print(f"Threshold Stats - Min: {test_energy.min():.4f}, Max: {test_energy.max():.4f}, Mean: {test_energy.mean():.4f}, Std: {test_energy.std():.4f}")
 
         # 4. 使用最佳阈值进行最终评估 (带 Point Adjustment)
         # Point Adjustment: 如果检测到异常片段中的任何一点，则视为检测到整个片段
