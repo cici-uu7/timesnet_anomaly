@@ -180,6 +180,7 @@ class Exp_TimesNet_AD(Exp_Anomaly_Detection):
         # 用于存储重构误差和关联差异（分开存储，后续归一化）
         reconstruction_errors = []
         association_discrepancies = []
+        test_labels_list = []  # 同步收集标签
 
         folder_path = './test_results/' + setting + '/'
         if not os.path.exists(folder_path):
@@ -189,7 +190,7 @@ class Exp_TimesNet_AD(Exp_Anomaly_Detection):
 
         # 1. 推理阶段：计算重构误差和关联差异
         with torch.no_grad():
-            for i, (batch_x, _) in enumerate(test_loader):
+            for i, (batch_x, batch_y) in enumerate(test_loader):
                 batch_x = batch_x.float().to(self.device)
 
                 # 前向传播
@@ -220,15 +221,22 @@ class Exp_TimesNet_AD(Exp_Anomaly_Detection):
 
                 reconstruction_errors.append(rec_error.detach().cpu().numpy())
                 association_discrepancies.append(assoc_disc.detach().cpu().numpy())
+                test_labels_list.append(batch_y.numpy())  # 同步收集标签
 
         # 2. 数据后处理和归一化
         # 拼接所有 Batch
         reconstruction_errors = np.concatenate(reconstruction_errors, axis=0).reshape(-1)
         association_discrepancies = np.concatenate(association_discrepancies, axis=0).reshape(-1)
+        test_labels = np.concatenate(test_labels_list, axis=0).reshape(-1)
+
+        print(f"Data shapes - rec: {reconstruction_errors.shape}, assoc: {association_discrepancies.shape}, labels: {test_labels.shape}")
 
         # 归一化处理（Z-score标准化）
         rec_mean, rec_std = reconstruction_errors.mean(), reconstruction_errors.std()
         assoc_mean, assoc_std = association_discrepancies.mean(), association_discrepancies.std()
+
+        print(f"Reconstruction Error Stats - Mean: {rec_mean:.4f}, Std: {rec_std:.4f}")
+        print(f"Association Discrepancy Stats - Mean: {assoc_mean:.4f}, Std: {assoc_std:.4f}")
 
         rec_norm = (reconstruction_errors - rec_mean) / (rec_std + 1e-8)
         assoc_norm = (association_discrepancies - assoc_mean) / (assoc_std + 1e-8)
@@ -238,20 +246,25 @@ class Exp_TimesNet_AD(Exp_Anomaly_Detection):
         alpha = getattr(self.args, 'alpha', 0.5)
         beta = getattr(self.args, 'beta', 0.5)
         print(f"Anomaly Score Weighting: alpha={alpha}, beta={beta}")
-        test_energy = alpha * rec_norm + beta * assoc_norm
+
+        # 加权组合
+        combined_score = alpha * rec_norm + beta * assoc_norm
+
+        # 重要: 组合后再次标准化,确保最终分布是标准正态分布
+        # 这样阈值搜索才能在合理范围内工作
+        test_energy_mean = combined_score.mean()
+        test_energy_std = combined_score.std()
+        test_energy = (combined_score - test_energy_mean) / (test_energy_std + 1e-8)
+
+        print(f"Final Score Stats - Mean: {test_energy.mean():.4f}, Std: {test_energy.std():.4f}")
 
         # 保存未归一化的原始数据用于分析
         np.save(folder_path + 'reconstruction_errors.npy', reconstruction_errors)
         np.save(folder_path + 'association_discrepancies.npy', association_discrepancies)
 
-        # 获取 Ground Truth 标签
-        test_labels = test_loader.dataset.test_labels
-
-        # 长度对齐 (裁剪掉多余部分)
-        if len(test_labels) > len(test_energy):
-            test_labels = test_labels[:len(test_energy)]
-        else:
-            test_energy = test_energy[:len(test_labels)]
+        # test_labels已在循环中收集,这里直接使用
+        # 确保长度一致(应该是一致的)
+        assert len(test_energy) == len(test_labels), f"Length mismatch: test_energy={len(test_energy)}, test_labels={len(test_labels)}"
 
         print("Test Labels Shape:", test_labels.shape)
         print("Anomaly Score Shape:", test_energy.shape)

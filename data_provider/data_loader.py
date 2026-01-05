@@ -442,7 +442,8 @@ class PSMSegLoader(Dataset):
         self.train = data
         data_len = len(self.train)
         self.val = self.train[(int)(data_len * 0.8):]
-        self.test_labels = test_label_df.values[:, 1:]
+        # 修复: 标签应该是一维的，不要保留第二个维度
+        self.test_labels = test_label_df.values[:, 1].flatten()
         print("test:", self.test.shape)
         print("train:", self.train.shape)
 
