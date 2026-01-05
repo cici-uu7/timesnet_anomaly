@@ -46,7 +46,7 @@ python run.py \
   --alpha $ALPHA \
   --beta $BETA \
   --sigma_init_factor $SIGMA_INIT_FACTOR \
-  --anomaly_ratio 5.0 \
+  --anomaly_ratio 2.0 \
   --output_attention
 
 echo ""
