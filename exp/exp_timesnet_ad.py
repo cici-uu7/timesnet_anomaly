@@ -172,15 +172,11 @@ class Exp_TimesNet_AD(Exp_Anomaly_Detection):
 
     def test(self, setting, test=0):
         test_data, test_loader = self._get_data(flag='test')
+        train_data, train_loader = self._get_data(flag='train')
 
         print('loading model')
         self.model.load_state_dict(torch.load(os.path.join('./checkpoints/' + setting, 'checkpoint.pth')))
         self.model.eval()
-
-        # 用于存储重构误差和关联差异（分开存储，后续归一化）
-        reconstruction_errors = []
-        association_discrepancies = []
-        test_labels_list = []  # 同步收集标签
 
         folder_path = './test_results/' + setting + '/'
         if not os.path.exists(folder_path):
@@ -188,7 +184,50 @@ class Exp_TimesNet_AD(Exp_Anomaly_Detection):
 
         criterion = nn.MSELoss(reduction='none')
 
-        # 1. 推理阶段：计算重构误差和关联差异
+        # 获取参数
+        alpha = getattr(self.args, 'alpha', 0.5)
+        beta = getattr(self.args, 'beta', 0.5)
+
+        # ============ 步骤 1: 统计训练集分数 (正常数据) ============
+        print("Computing anomaly scores on training set (normal data)...")
+        train_rec_errors = []
+        train_assoc_discs = []
+
+        with torch.no_grad():
+            for i, (batch_x, _) in enumerate(train_loader):
+                batch_x = batch_x.float().to(self.device)
+                output, series_attn, prior_attn = self.model(batch_x, None, None, None)
+
+                # 计算重构误差
+                rec_error = torch.mean(criterion(output, batch_x), dim=-1)
+
+                # 计算关联差异
+                assoc_disc = torch.zeros(batch_x.shape[0], batch_x.shape[1]).to(self.device)
+                for u in range(prior_attn.shape[1]):
+                    if series_attn.dim() == 4:
+                        s_attn = series_attn[:, u, :, :]
+                        p_attn = prior_attn[:, u, :, :]
+                    else:
+                        s_attn = series_attn
+                        p_attn = prior_attn
+                    kl_ps = self.my_kl_loss(p_attn, s_attn)
+                    kl_sp = self.my_kl_loss(s_attn, p_attn)
+                    assoc_disc += kl_ps + kl_sp
+                assoc_disc = assoc_disc / prior_attn.shape[1]
+
+                train_rec_errors.append(rec_error.detach().cpu().numpy())
+                train_assoc_discs.append(assoc_disc.detach().cpu().numpy())
+
+        train_rec_errors = np.concatenate(train_rec_errors, axis=0).reshape(-1)
+        train_assoc_discs = np.concatenate(train_assoc_discs, axis=0).reshape(-1)
+        print(f"Train scores computed: {len(train_rec_errors)} points")
+
+        # ============ 步骤 2: 计算测试集分数 ============
+        print("Computing anomaly scores on test set...")
+        test_rec_errors = []
+        test_assoc_discs = []
+        test_labels_list = []
+
         with torch.no_grad():
             for i, (batch_x, batch_y) in enumerate(test_loader):
                 batch_x = batch_x.float().to(self.device)
@@ -210,7 +249,6 @@ class Exp_TimesNet_AD(Exp_Anomaly_Detection):
                         p_attn = prior_attn
 
                     # 计算对称 KL 散度（裁剪后）
-                    # my_kl_loss 返回 [B, L]，对每个时间步i，计算其与所有其他时间步的KL散度之和
                     kl_ps = self.my_kl_loss(p_attn, s_attn)  # [B, L]
                     kl_sp = self.my_kl_loss(s_attn, p_attn)  # [B, L]
 
@@ -219,103 +257,87 @@ class Exp_TimesNet_AD(Exp_Anomaly_Detection):
 
                 assoc_disc = assoc_disc / prior_attn.shape[1]
 
-                reconstruction_errors.append(rec_error.detach().cpu().numpy())
-                association_discrepancies.append(assoc_disc.detach().cpu().numpy())
+                test_rec_errors.append(rec_error.detach().cpu().numpy())
+                test_assoc_discs.append(assoc_disc.detach().cpu().numpy())
                 test_labels_list.append(batch_y.numpy())  # 同步收集标签
 
-        # 2. 数据后处理和归一化
-        # 拼接所有 Batch
-        reconstruction_errors = np.concatenate(reconstruction_errors, axis=0).reshape(-1)
-        association_discrepancies = np.concatenate(association_discrepancies, axis=0).reshape(-1)
+        # 拼接测试集数据
+        test_rec_errors = np.concatenate(test_rec_errors, axis=0).reshape(-1)
+        test_assoc_discs = np.concatenate(test_assoc_discs, axis=0).reshape(-1)
         test_labels = np.concatenate(test_labels_list, axis=0).reshape(-1)
 
-        print(f"Data shapes - rec: {reconstruction_errors.shape}, assoc: {association_discrepancies.shape}, labels: {test_labels.shape}")
+        print(f"Test data shapes - rec: {test_rec_errors.shape}, assoc: {test_assoc_discs.shape}, labels: {test_labels.shape}")
 
-        # 归一化处理（Z-score标准化）
-        rec_mean, rec_std = reconstruction_errors.mean(), reconstruction_errors.std()
-        assoc_mean, assoc_std = association_discrepancies.mean(), association_discrepancies.std()
+        # ============ 步骤 3: 联合归一化 (训练集+测试集) ============
+        # 合并训练集和测试集来计算归一化参数
+        all_rec_errors = np.concatenate([train_rec_errors, test_rec_errors], axis=0)
+        all_assoc_discs = np.concatenate([train_assoc_discs, test_assoc_discs], axis=0)
 
-        print(f"Reconstruction Error Stats - Mean: {rec_mean:.4f}, Std: {rec_std:.4f}")
-        print(f"Association Discrepancy Stats - Mean: {assoc_mean:.4f}, Std: {assoc_std:.4f}")
+        # 使用联合数据计算归一化参数
+        rec_mean, rec_std = all_rec_errors.mean(), all_rec_errors.std()
+        assoc_mean, assoc_std = all_assoc_discs.mean(), all_assoc_discs.std()
 
-        rec_norm = (reconstruction_errors - rec_mean) / (rec_std + 1e-8)
-        assoc_norm = (association_discrepancies - assoc_mean) / (assoc_std + 1e-8)
+        print(f"Combined Reconstruction Error Stats - Mean: {rec_mean:.4f}, Std: {rec_std:.4f}")
+        print(f"Combined Association Discrepancy Stats - Mean: {assoc_mean:.4f}, Std: {assoc_std:.4f}")
 
-        # 加权组合（可调参数）
-        # alpha: 重构误差权重, beta: 关联差异权重
-        alpha = getattr(self.args, 'alpha', 0.5)
-        beta = getattr(self.args, 'beta', 0.5)
-        print(f"Anomaly Score Weighting: alpha={alpha}, beta={beta}")
+        # 分别归一化训练集和测试集
+        train_rec_norm = (train_rec_errors - rec_mean) / (rec_std + 1e-8)
+        train_assoc_norm = (train_assoc_discs - assoc_mean) / (assoc_std + 1e-8)
+
+        test_rec_norm = (test_rec_errors - rec_mean) / (rec_std + 1e-8)
+        test_assoc_norm = (test_assoc_discs - assoc_mean) / (assoc_std + 1e-8)
 
         # 加权组合
-        combined_score = alpha * rec_norm + beta * assoc_norm
+        print(f"Anomaly Score Weighting: alpha={alpha}, beta={beta}")
+        train_combined = alpha * train_rec_norm + beta * train_assoc_norm
+        test_combined = alpha * test_rec_norm + beta * test_assoc_norm
 
-        # 重要: 组合后再次标准化,确保最终分布是标准正态分布
-        # 这样阈值搜索才能在合理范围内工作
-        test_energy_mean = combined_score.mean()
-        test_energy_std = combined_score.std()
-        test_energy = (combined_score - test_energy_mean) / (test_energy_std + 1e-8)
+        # 对组合后的分数进行二次归一化
+        combined_all = np.concatenate([train_combined, test_combined], axis=0)
+        combined_mean = combined_all.mean()
+        combined_std = combined_all.std()
 
-        print(f"Final Score Stats - Mean: {test_energy.mean():.4f}, Std: {test_energy.std():.4f}")
+        train_energy = (train_combined - combined_mean) / (combined_std + 1e-8)
+        test_energy = (test_combined - combined_mean) / (combined_std + 1e-8)
 
-        # 保存未归一化的原始数据用于分析
-        np.save(folder_path + 'reconstruction_errors.npy', reconstruction_errors)
-        np.save(folder_path + 'association_discrepancies.npy', association_discrepancies)
+        print(f"Final Score Stats - Train Mean: {train_energy.mean():.4f}, Std: {train_energy.std():.4f}")
+        print(f"Final Score Stats - Test Mean: {test_energy.mean():.4f}, Std: {test_energy.std():.4f}")
 
-        # test_labels已在循环中收集,这里直接使用
-        # 确保长度一致(应该是一致的)
-        assert len(test_energy) == len(test_labels), f"Length mismatch: test_energy={len(test_energy)}, test_labels={len(test_labels)}"
-
-        print("Test Labels Shape:", test_labels.shape)
-        print("Anomaly Score Shape:", test_energy.shape)
-
-        # 保存原始分数和标签
+        # 保存数据
+        np.save(folder_path + 'reconstruction_errors.npy', test_rec_errors)
+        np.save(folder_path + 'association_discrepancies.npy', test_assoc_discs)
         np.save(folder_path + 'anomaly_score.npy', test_energy)
         np.save(folder_path + 'test_labels.npy', test_labels)
 
-        # 3. 阈值搜索与评估 (Improved Threshold Search)
-        # 使用百分位数范围而非min/max，更稳健
-        percentiles = np.linspace(1, 99, 100)
-        threshs = np.percentile(test_energy, percentiles)
+        # ============ 步骤 4: 使用联合分布选择阈值 ============
+        # 关键改进: 使用训练集+测试集的联合分布来选择阈值
+        combined_energy = np.concatenate([train_energy, test_energy], axis=0)
+        threshold = np.percentile(combined_energy, 100 - self.args.anomaly_ratio)
 
-        best_f1 = -1
-        best_precision = -1
-        best_recall = -1
-        best_thresh = 0.0
+        print(f"Threshold (based on combined distribution): {threshold:.4f}")
+        print(f"Anomaly ratio: {self.args.anomaly_ratio}%")
 
-        print("Calculating metrics (This might take a while)...")
+        # ============ 步骤 5: 评估 ============
+        # 使用阈值对测试集进行预测
+        pred = (test_energy > threshold).astype(int)
+        gt = test_labels.astype(int)
 
-        # 简单循环寻找最佳阈值 (不带 adjustment 以加快速度)
-        for thresh in threshs:
-            pred = (test_energy > thresh).astype(int)
-            precision, recall, f1, _ = precision_recall_fscore_support(test_labels, pred, average='binary',
-                                                                       zero_division=0)
-            if f1 > best_f1:
-                best_f1 = f1
-                best_precision = precision
-                best_recall = recall
-                best_thresh = thresh
+        print("Prediction shape:", pred.shape)
+        print("Ground truth shape:", gt.shape)
 
-        print(f"Best Threshold (Percentile Search): {best_thresh}")
-        print(f"Threshold Stats - Min: {test_energy.min():.4f}, Max: {test_energy.max():.4f}, Mean: {test_energy.mean():.4f}, Std: {test_energy.std():.4f}")
-
-        # 4. 使用最佳阈值进行最终评估 (带 Point Adjustment)
-        # Point Adjustment: 如果检测到异常片段中的任何一点，则视为检测到整个片段
-        final_pred = (test_energy > best_thresh).astype(int)
-
+        # 应用 Point Adjustment
         try:
-            # 应用 Point Adjustment
-            _, final_pred_adjusted = adjustment(test_labels, final_pred)
+            gt_adjusted, pred_adjusted = adjustment(gt, pred)
         except Exception as e:
-            print(f"Warning: Point adjustment failed ({e}), utilizing raw predictions.")
-            final_pred_adjusted = final_pred
+            print(f"Warning: Point adjustment failed ({e}), using raw predictions.")
+            gt_adjusted, pred_adjusted = gt, pred
 
         # 计算最终指标
-        precision, recall, f1, _ = precision_recall_fscore_support(test_labels, final_pred_adjusted, average='binary',
+        precision, recall, f1, _ = precision_recall_fscore_support(gt_adjusted, pred_adjusted, average='binary',
                                                                    zero_division=0)
-        accuracy = accuracy_score(test_labels, final_pred_adjusted)
+        accuracy = accuracy_score(gt_adjusted, pred_adjusted)
 
-        print(f"Final Metrics with Point Adjustment:")
+        print(f"\nFinal Metrics with Point Adjustment:")
         print(f"Accuracy : {accuracy:.4f}")
         print(f"Precision: {precision:.4f}")
         print(f"Recall   : {recall:.4f}")
