@@ -21,7 +21,7 @@ python run.py \
   --pred_len 0 \
   --d_model 64 \
   --d_ff 64 \
-  --e_layers 2 \
+  --e_layers 3 \
   --top_k 3 \
   --num_kernels 6 \
   --enc_in 25 \
@@ -30,9 +30,9 @@ python run.py \
   --anomaly_ratio 1.0 \
   --batch_size 128 \
   --learning_rate 0.0001 \
-  --train_epochs 5 \
+  --train_epochs 10 \
   --patience 3 \
-  --k 0.5 \
+  --k 3.0 \
   --margin 0.5 \
   --alpha 0.6 \
   --beta 0.4 \
