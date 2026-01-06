@@ -10,8 +10,8 @@ echo "========================================="
 # 可调参数配置
 K_VAL=3.0                    # Minimax策略权重 (推荐: 1.0-5.0)
 MARGIN=0.5                   # Prior差异阈值 (推荐: 0.1-1.0)
-ALPHA=0.5                    # 重构误差权重 (推荐: 0.3-0.7)
-BETA=0.5                     # 关联差异权重 (推荐: 0.3-0.7)
+ALPHA=0.7                    # 重构误差权重 (推荐: 0.3-0.7)
+BETA=0.3                     # 关联差异权重 (推荐: 0.3-0.7)
 SIGMA_INIT_FACTOR=5.0        # Prior sigma初始化因子 (推荐: 3.0-10.0)
 
 echo "参数配置:"
@@ -46,7 +46,7 @@ python run.py \
   --alpha $ALPHA \
   --beta $BETA \
   --sigma_init_factor $SIGMA_INIT_FACTOR \
-  --anomaly_ratio 2.0 \
+  --anomaly_ratio 1.0 \
   --output_attention
 
 echo ""
