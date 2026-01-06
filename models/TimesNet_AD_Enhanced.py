@@ -31,7 +31,7 @@ class Model(nn.Module):
 
         # 配置参数
         sigma_init_factor = getattr(configs, 'sigma_init_factor', 5.0)
-        self.dynamic_prior = getattr(configs, 'dynamic_prior', True)
+        self.dynamic_prior = getattr(configs, 'dynamic_prior', False)  # 默认关闭动态Prior
         self.fusion_method = getattr(configs, 'fusion_method', 'weighted')  # 'weighted', 'attention', 'concat'
 
         # 1. 骨干网络

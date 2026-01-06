@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # TimesNet_AD 增强版模型运行脚本
-# 特性: 多层架构 + 动态Prior
+# 特性: 多层架构 + 多层级融合（暂时关闭动态Prior以保持稳定性）
 # 用法: ./run_timesnet_ad_enhanced.sh
 
 echo "==========================================="
 echo "TimesNet_AD 增强版模型"
-echo "特性: 多层架构 + 动态Prior"
+echo "特性: 多层架构 + 多层级融合"
 echo "==========================================="
 
 python run.py \
@@ -32,7 +32,6 @@ python run.py \
   --alpha 0.6 \
   --beta 0.4 \
   --sigma_init_factor 5.0 \
-  --dynamic_prior \
   --fusion_method weighted \
   --output_attention
 
