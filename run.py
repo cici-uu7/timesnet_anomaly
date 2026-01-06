@@ -12,6 +12,7 @@ from utils.print_args import print_args
 from exp.exp_timesnet_ad import Exp_TimesNet_AD
 from exp.exp_timesnet_ad_enhanced import Exp_TimesNet_AD_Enhanced
 from exp.exp_timesnet_ad_t import Exp_TimesNet_AD_T
+from exp.exp_timesnet_ad_v2 import Exp_TimesNet_AD_V2
 import random
 import numpy as np
 
@@ -204,6 +205,8 @@ if __name__ == '__main__':
             Exp = Exp_TimesNet_AD_Enhanced
         elif args.model == 'TimesNet_AD_T':
             Exp = Exp_TimesNet_AD_T
+        elif args.model == 'TimesNet_AD_V2':
+            Exp = Exp_TimesNet_AD_V2
         else:
             Exp = Exp_Anomaly_Detection
     elif args.task_name == 'classification':
