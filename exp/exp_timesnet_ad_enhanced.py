@@ -96,16 +96,6 @@ class Exp_TimesNet_AD_Enhanced(Exp_TimesNet_AD):
         total_series_loss = total_series_loss / num_layers
         total_prior_margin_loss = total_prior_margin_loss / num_layers
 
-        # 🔍 调试输出：第一次调用时打印原始prior_loss
-        if not hasattr(self, '_debug_printed'):
-            import numpy as np
-            print(f"\n🔍 First batch debug:")
-            print(f"   Per-layer prior_loss: {[f'{x:.4f}' for x in debug_prior_losses]}")
-            print(f"   Average: {np.mean(debug_prior_losses):.4f}")
-            print(f"   Margin: {margin_val}")
-            print(f"   Margin - avg: {margin_val - np.mean(debug_prior_losses):.4f}")
-            print(f"   → If negative, old clamp would return 0!\n")
-            self._debug_printed = True
 
         return total_series_loss, total_prior_margin_loss
 
