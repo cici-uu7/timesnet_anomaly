@@ -48,6 +48,9 @@ class Exp_TimesNet_AD_Enhanced(Exp_TimesNet_AD):
         total_series_loss = 0.0
         total_prior_margin_loss = 0.0
 
+        # 调试：记录每层的原始prior_loss
+        debug_prior_losses = []
+
         for layer_idx in range(num_layers):
             series_attn = all_series_attn[layer_idx]
             prior_attn = all_prior_attn[layer_idx]
@@ -75,8 +78,14 @@ class Exp_TimesNet_AD_Enhanced(Exp_TimesNet_AD):
             series_loss = series_loss / num_heads
             prior_loss = prior_loss / num_heads
 
-            # Margin-based loss
-            prior_margin_loss = torch.clamp(margin_val - prior_loss, min=0)
+            # 调试：记录原始prior_loss
+            debug_prior_losses.append(prior_loss.item())
+
+            # 新策略: 保持Prior独立性的连续损失函数
+            # -prior_loss: 鼓励Prior与Series差异
+            # 二次惩罚: 防止差异过大，稳定训练
+            target_discrepancy = margin_val
+            prior_margin_loss = -prior_loss + 0.5 * (prior_loss - target_discrepancy) ** 2
 
             total_series_loss += series_loss
             total_prior_margin_loss += prior_margin_loss
@@ -84,6 +93,17 @@ class Exp_TimesNet_AD_Enhanced(Exp_TimesNet_AD):
         # 平均多层Loss
         total_series_loss = total_series_loss / num_layers
         total_prior_margin_loss = total_prior_margin_loss / num_layers
+
+        # 🔍 调试输出：第一次调用时打印原始prior_loss
+        if not hasattr(self, '_debug_printed'):
+            import numpy as np
+            print(f"\n🔍 First batch debug:")
+            print(f"   Per-layer prior_loss: {[f'{x:.4f}' for x in debug_prior_losses]}")
+            print(f"   Average: {np.mean(debug_prior_losses):.4f}")
+            print(f"   Margin: {margin_val}")
+            print(f"   Margin - avg: {margin_val - np.mean(debug_prior_losses):.4f}")
+            print(f"   → If negative, old clamp would return 0!\n")
+            self._debug_printed = True
 
         return total_series_loss, total_prior_margin_loss
 
