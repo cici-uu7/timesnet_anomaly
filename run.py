@@ -10,6 +10,7 @@ from exp.exp_classification import Exp_Classification
 from exp.exp_zero_shot_forecasting import Exp_Zero_Shot_Forecast
 from utils.print_args import print_args
 from exp.exp_timesnet_ad import Exp_TimesNet_AD
+from exp.exp_timesnet_ad_enhanced import Exp_TimesNet_AD_Enhanced
 import random
 import numpy as np
 
@@ -58,6 +59,11 @@ if __name__ == '__main__':
     parser.add_argument('--beta', type=float, default=0.5, help='Weight for association discrepancy in anomaly score')
     parser.add_argument('--sigma_init_factor', type=float, default=5.0, help='Prior sigma initialization: win_size / factor')
     parser.add_argument('--output_attention', action='store_true', help='whether to output attention in encoder')
+
+    # Enhanced TimesNet_AD parameters
+    parser.add_argument('--dynamic_prior', action='store_true', default=False, help='Enable dynamic prior (hybrid static+dynamic)')
+    parser.add_argument('--fusion_method', type=str, default='weighted', choices=['weighted', 'attention', 'concat'],
+                        help='Multi-level feature fusion method: weighted, attention, concat')
 
     # model define
     parser.add_argument('--expand', type=int, default=2, help='expansion factor for Mamba')
@@ -193,6 +199,8 @@ if __name__ == '__main__':
     elif args.task_name == 'anomaly_detection':
         if args.model == 'TimesNet_AD':
             Exp = Exp_TimesNet_AD
+        elif args.model == 'TimesNet_AD_Enhanced':
+            Exp = Exp_TimesNet_AD_Enhanced
         else:
             Exp = Exp_Anomaly_Detection
     elif args.task_name == 'classification':
