@@ -11,6 +11,7 @@ from exp.exp_zero_shot_forecasting import Exp_Zero_Shot_Forecast
 from utils.print_args import print_args
 from exp.exp_timesnet_ad import Exp_TimesNet_AD
 from exp.exp_timesnet_ad_enhanced import Exp_TimesNet_AD_Enhanced
+from exp.exp_timesnet_ad_t import Exp_TimesNet_AD_T
 import random
 import numpy as np
 
@@ -201,6 +202,8 @@ if __name__ == '__main__':
             Exp = Exp_TimesNet_AD
         elif args.model == 'TimesNet_AD_Enhanced':
             Exp = Exp_TimesNet_AD_Enhanced
+        elif args.model == 'TimesNet_AD_T':
+            Exp = Exp_TimesNet_AD_T
         else:
             Exp = Exp_Anomaly_Detection
     elif args.task_name == 'classification':
