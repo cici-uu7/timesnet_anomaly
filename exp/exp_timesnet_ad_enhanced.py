@@ -81,11 +81,13 @@ class Exp_TimesNet_AD_Enhanced(Exp_TimesNet_AD):
             # 调试：记录原始prior_loss
             debug_prior_losses.append(prior_loss.item())
 
-            # 新策略: 保持Prior独立性的连续损失函数
-            # -prior_loss: 鼓励Prior与Series差异
-            # 二次惩罚: 防止差异过大，稳定训练
-            target_discrepancy = margin_val
-            prior_margin_loss = -prior_loss + 0.5 * (prior_loss - target_discrepancy) ** 2
+            # 软边界策略: 保持Prior独立性
+            # 1. prior_loss < margin: 强鼓励增大（主要项）
+            # 2. prior_loss > margin: 弱约束减小（二次惩罚）
+            prior_margin_loss = (
+                torch.clamp(margin_val - prior_loss, min=0) +  # 主要项
+                0.1 * torch.clamp(prior_loss - margin_val, min=0) ** 2  # 约束项
+            )
 
             total_series_loss += series_loss
             total_prior_margin_loss += prior_margin_loss
