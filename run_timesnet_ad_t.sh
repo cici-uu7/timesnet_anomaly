@@ -34,9 +34,10 @@ python run.py \
   --anomaly_ratio 1.0 \
   --batch_size 128 \
   --learning_rate 0.0001 \
-  --train_epochs 5 \
-  --patience 3 \
-  --k 3.0 \
+  --train_epochs 10 \
+  --patience 5 \
+  --lradj type3 \
+  --k 1.5 \
   --dropout 0.1 \
   --output_attention
 

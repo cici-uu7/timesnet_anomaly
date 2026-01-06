@@ -90,7 +90,7 @@ class AnomalyAttentionBlock(nn.Module):
         前向传播
         Args:
             x: [B, L, D] 输入特征
-            freq_info: [B, L, D] 可选的频域信息，用于增强Prior
+            freq_info: 保留参数兼容性，但不再使用
         Returns:
             output: [B, L, D]
             series_attn: [B, H, L, L]
@@ -115,16 +115,14 @@ class AnomalyAttentionBlock(nn.Module):
         output = self.out_projection(out)
 
         # 2. Prior Association (高斯Prior)
-        # 如果有频域信息，融合进 sigma 计算
-        if freq_info is not None:
-            sigma_input = x + 0.1 * freq_info  # 频域增强
-        else:
-            sigma_input = x
-
-        sigma = self.sigma_projection(sigma_input)  # [B, L, H]
+        # 不使用频域增强，避免干扰 Sigma 学习
+        sigma = self.sigma_projection(x)  # [B, L, H]
         sigma = sigma.transpose(1, 2)  # [B, H, L]
         sigma = torch.sigmoid(sigma * 5) + 1e-5
         sigma = torch.pow(3, sigma) - 1  # 范围 [0, 2]
+
+        # 添加 Sigma 下限约束，防止崩溃到 0
+        sigma = torch.clamp(sigma, min=0.1, max=2.0)
 
         # 更新监控值
         with torch.no_grad():
