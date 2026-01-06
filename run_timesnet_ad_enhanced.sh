@@ -27,7 +27,7 @@ python run.py \
   --anomaly_ratio 1.0 \
   --batch_size 128 \
   --train_epochs 5 \
-  --k 3.0 \
+  --k 0.5 \
   --margin 0.5 \
   --alpha 0.6 \
   --beta 0.4 \
