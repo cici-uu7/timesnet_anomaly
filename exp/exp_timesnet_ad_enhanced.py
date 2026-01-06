@@ -1,15 +1,16 @@
 """
 增强版 TimesNet_AD 实验类
-支持：
-1. 多层 Loss 聚合
-2. 动态 Prior 训练
-3. 多层级异常分数融合
+基于原版 Anomaly Transformer 的训练和测试逻辑改进：
+1. Minimax 两阶段训练（与原版一致）
+2. Softmax 加权异常分数（与原版一致）
+3. 多层 Loss 聚合
 """
 
 from exp.exp_timesnet_ad import Exp_TimesNet_AD
 from models import TimesNet_AD_Enhanced
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 import os
 from sklearn.metrics import precision_recall_fscore_support, accuracy_score
@@ -18,12 +19,13 @@ from utils.tools import adjustment
 
 class Exp_TimesNet_AD_Enhanced(Exp_TimesNet_AD):
     """
-    增强版实验类，基于原版扩展多层训练和测试逻辑
+    增强版实验类
+    关键改进：
+    1. Minimax 两阶段训练：loss1.backward(retain_graph=True) + loss2.backward()
+    2. Softmax 加权异常分数：metric = softmax(-series_loss - prior_loss)
     """
     def __init__(self, args):
-        # 先调用父类初始化
         super().__init__(args)
-        # 注册增强版模型
         self.model_dict['TimesNet_AD_Enhanced'] = TimesNet_AD_Enhanced
 
     def _build_model(self):
@@ -33,78 +35,82 @@ class Exp_TimesNet_AD_Enhanced(Exp_TimesNet_AD):
             model = nn.DataParallel(model, device_ids=self.args.device_ids)
         return model
 
-    def _compute_multi_layer_loss(self, all_series_attn, all_prior_attn, k_val, margin_val):
+    def _normalize_prior(self, prior_attn):
         """
-        计算多层Loss
-        输入:
-            all_series_attn: List of [B, H, L, L]
-            all_prior_attn: List of [B, H, L, L] or [H, L, L]
-            k_val: Minimax权重
-            margin_val: 差异阈值
+        归一化 Prior 注意力（与原版 Anomaly Transformer 一致）
+        prior_attn: [B, H, L, L]
+        返回: [B, H, L, L] 归一化后的 Prior
+        """
+        # 沿最后一维求和并归一化
+        prior_sum = torch.sum(prior_attn, dim=-1, keepdim=True)  # [B, H, L, 1]
+        prior_normalized = prior_attn / (prior_sum + 1e-8)
+        return prior_normalized
+
+    def _compute_minimax_loss(self, all_series_attn, all_prior_attn):
+        """
+        计算 Minimax 损失（与原版 Anomaly Transformer 一致）
+
         返回:
-            total_series_loss, total_prior_margin_loss
+            series_loss: 用于 loss1 = rec_loss - k * series_loss
+            prior_loss: 用于 loss2 = rec_loss + k * prior_loss
         """
         num_layers = len(all_series_attn)
         total_series_loss = 0.0
-        total_prior_margin_loss = 0.0
-
-        # 调试：记录每层的原始prior_loss
-        debug_prior_losses = []
+        total_prior_loss = 0.0
 
         for layer_idx in range(num_layers):
-            series_attn = all_series_attn[layer_idx]
-            prior_attn = all_prior_attn[layer_idx]
+            series_attn = all_series_attn[layer_idx]  # [B, H, L, L]
+            prior_attn = all_prior_attn[layer_idx]    # [B, H, L, L]
+
+            # 归一化 Prior（与原版一致）
+            prior_normalized = self._normalize_prior(prior_attn)
 
             series_loss = 0.0
             prior_loss = 0.0
+            num_heads = series_attn.shape[1]
 
-            # 处理Prior维度
-            if prior_attn.dim() == 3:  # [H, L, L]
-                # 静态Prior，扩展batch维度
-                prior_attn = prior_attn.unsqueeze(0).expand(series_attn.shape[0], -1, -1, -1)
-
-            # 遍历每个Head
-            num_heads = prior_attn.shape[1]
             for h in range(num_heads):
-                s_attn = series_attn[:, h, :, :]
-                p_attn = prior_attn[:, h, :, :]
+                s_attn = series_attn[:, h, :, :]      # [B, L, L]
+                p_attn = prior_normalized[:, h, :, :]  # [B, L, L]
 
-                # Series Loss: KL(Series || Prior)
-                series_loss += torch.mean(self.my_kl_loss(s_attn, p_attn))
+                # Series Loss: KL(Series || Prior.detach()) + KL(Prior.detach() || Series)
+                # 注意：Prior 在 series_loss 计算时 detach
+                series_loss += (
+                    torch.mean(self.my_kl_loss(s_attn, p_attn.detach())) +
+                    torch.mean(self.my_kl_loss(p_attn.detach(), s_attn))
+                )
 
-                # Prior Loss: KL(Prior || Series)
-                prior_loss += torch.mean(self.my_kl_loss(p_attn, s_attn))
+                # Prior Loss: KL(Prior || Series.detach()) + KL(Series.detach() || Prior)
+                # 注意：Series 在 prior_loss 计算时 detach
+                prior_loss += (
+                    torch.mean(self.my_kl_loss(p_attn, s_attn.detach())) +
+                    torch.mean(self.my_kl_loss(s_attn.detach(), p_attn))
+                )
 
             series_loss = series_loss / num_heads
             prior_loss = prior_loss / num_heads
 
-            # 调试：记录原始prior_loss
-            debug_prior_losses.append(prior_loss.item())
-
-            # 软边界策略: 保持Prior独立性
-            # 1. prior_loss < margin: 强鼓励增大（主要项）
-            # 2. prior_loss > margin: 弱约束减小（二次惩罚）
-            prior_margin_loss = (
-                torch.clamp(margin_val - prior_loss, min=0) +  # 主要项
-                0.1 * torch.clamp(prior_loss - margin_val, min=0) ** 2  # 约束项
-            )
-
             total_series_loss += series_loss
-            total_prior_margin_loss += prior_margin_loss
+            total_prior_loss += prior_loss
 
-        # 平均多层Loss
+        # 平均多层 Loss
         total_series_loss = total_series_loss / num_layers
-        total_prior_margin_loss = total_prior_margin_loss / num_layers
+        total_prior_loss = total_prior_loss / num_layers
 
-
-        return total_series_loss, total_prior_margin_loss
+        return total_series_loss, total_prior_loss
 
     def train(self, setting):
         """
-        增强版训练函数
-        支持多层Loss聚合
+        Minimax 两阶段训练（与原版 Anomaly Transformer 一致）
+
+        关键：
+        loss1 = rec_loss - k * series_loss  → 最大化 Series-Prior 差异
+        loss2 = rec_loss + k * prior_loss   → 最小化 Prior-Series 差异
+
+        loss1.backward(retain_graph=True)
+        loss2.backward()
+        optimizer.step()
         """
-        # 获取数据加载器
         train_data, train_loader = self._get_data(flag='train')
         vali_data, vali_loader = self._get_data(flag='val')
         test_data, test_loader = self._get_data(flag='test')
@@ -117,24 +123,16 @@ class Exp_TimesNet_AD_Enhanced(Exp_TimesNet_AD):
         if not os.path.exists(path):
             os.makedirs(path)
 
-        # 初始化早停机制
         early_stopping = EarlyStopping(patience=self.args.patience, verbose=True)
-
         optimizer = self._select_optimizer()
         criterion = nn.MSELoss()
 
-        # 获取参数
         k_val = getattr(self.args, 'k', 3.0)
-        margin_val = getattr(self.args, 'margin', 0.5)
-        dynamic_prior = getattr(self.args, 'dynamic_prior', True)
 
-        print(f"Training Enhanced TimesNet_AD")
-        print(f"  - Layers: {self.args.e_layers}, Fusion: {getattr(self.args, 'fusion_method', 'weighted')}, Dynamic Prior: {dynamic_prior}")
-        print(f"  - Minimax: k={k_val}, margin={margin_val}")
-
-        # 只在第一个epoch前打印初始Sigma
-        sigma_means = [block.prior_sigma.data.mean().item() for block in self.model.anomaly_blocks]
-        print(f"  - Initial Sigma: {sigma_means}")
+        print(f"Training Enhanced TimesNet_AD (Minimax Strategy)")
+        print(f"  - Layers: {self.args.e_layers}")
+        print(f"  - Minimax k={k_val}")
+        print(f"  - Two-phase backward: loss1.backward(retain_graph=True) + loss2.backward()")
         print("")
 
         for epoch in range(self.args.train_epochs):
@@ -152,51 +150,54 @@ class Exp_TimesNet_AD_Enhanced(Exp_TimesNet_AD):
 
                 batch_x = batch_x.float().to(self.device)
 
-                # 前向传播：返回重构结果 + 多层注意力
+                # 前向传播
                 output, all_series_attn, all_prior_attn = self.model(batch_x, None, None, None)
 
                 # 1. 重构损失
                 rec_loss = criterion(output, batch_x)
 
-                # 2. 多层关联差异损失
-                series_loss, prior_margin_loss = self._compute_multi_layer_loss(
-                    all_series_attn, all_prior_attn, k_val, margin_val
+                # 2. Minimax 损失
+                series_loss, prior_loss = self._compute_minimax_loss(
+                    all_series_attn, all_prior_attn
                 )
 
-                # 3. 总损失
-                loss = rec_loss + k_val * series_loss + k_val * prior_margin_loss
+                # 3. 两阶段反向传播（与原版 Anomaly Transformer 一致）
+                # Phase 1: 最大化 Series-Prior 差异
+                loss1 = rec_loss - k_val * series_loss
+                loss1.backward(retain_graph=True)
 
-                # 反向传播
-                loss.backward()
+                # Phase 2: 最小化 Prior-Series 差异
+                loss2 = rec_loss + k_val * prior_loss
+                loss2.backward()
+
                 optimizer.step()
 
                 train_loss.append(rec_loss.item())
                 epoch_series_loss.append(series_loss.item())
-                epoch_prior_loss.append(prior_margin_loss.item())
+                epoch_prior_loss.append(prior_loss.item())
 
                 if (i + 1) % 100 == 0:
-                    print(f"\titers: {i + 1}, epoch: {epoch + 1} | loss: {rec_loss.item():.7f}")
+                    print(f"\titers: {i + 1}, epoch: {epoch + 1} | rec_loss: {rec_loss.item():.7f}")
                     speed = (time.time() - time_now) / iter_count
                     left_time = speed * ((self.args.train_epochs - epoch) * len(train_loader) - i)
                     print(f'\tspeed: {speed:.4f}s/iter; left time: {left_time:.4f}s')
                     iter_count = 0
                     time_now = time.time()
 
-            print(f"Epoch: {epoch + 1} cost time: {time.time() - epoch_time}")
-            train_loss = np.average(train_loss)
+            print(f"Epoch: {epoch + 1} cost time: {time.time() - epoch_time:.2f}s")
+            train_loss_avg = np.average(train_loss)
             avg_series_loss = np.average(epoch_series_loss)
             avg_prior_loss = np.average(epoch_prior_loss)
 
-            # 验证集验证
+            # 验证
             vali_loss = self.vali(vali_data, vali_loader, criterion)
 
-            # 获取当前Sigma均值（用于监控）
-            sigma_means = [block.prior_sigma.data.mean().item() for block in self.model.anomaly_blocks]
+            # 获取 Sigma 监控值
+            sigma_means = [block.prior_sigma.mean().item() for block in self.model.anomaly_blocks]
 
-            print(f"Epoch: {epoch + 1}, Steps: {len(train_loader)} | Train Loss: {train_loss:.7f} Vali Loss: {vali_loss:.7f}")
-            print(f"  ↳ S-Loss: {avg_series_loss:.4f}, P-Loss: {avg_prior_loss:.4f}, Sigma: {[f'{s:.2f}' for s in sigma_means]}")
+            print(f"Epoch: {epoch + 1}, Steps: {len(train_loader)} | Train Loss: {train_loss_avg:.7f} Vali Loss: {vali_loss:.7f}")
+            print(f"  ↳ S-Loss: {avg_series_loss:.4f}, P-Loss: {avg_prior_loss:.4f}, Sigma: {[f'{s:.3f}' for s in sigma_means]}")
 
-            # 早停判断
             early_stopping(vali_loss, self.model, path)
             if early_stopping.early_stop:
                 print("Early stopping")
@@ -205,48 +206,72 @@ class Exp_TimesNet_AD_Enhanced(Exp_TimesNet_AD):
             from utils.tools import adjust_learning_rate
             adjust_learning_rate(optimizer, epoch + 1, self.args)
 
-        # 训练结束，简洁输出最终Sigma
-        sigma_final = [block.prior_sigma.data.mean().item() for block in self.model.anomaly_blocks]
-        print(f"\n✓ Training complete. Final Sigma: {[f'{s:.2f}' for s in sigma_final]}")
+        # 训练结束
+        sigma_final = [block.prior_sigma.mean().item() for block in self.model.anomaly_blocks]
+        print(f"\n✓ Training complete. Final Sigma: {[f'{s:.3f}' for s in sigma_final]}")
 
-        # 加载最优模型
         best_model_path = path + '/' + 'checkpoint.pth'
         self.model.load_state_dict(torch.load(best_model_path))
 
         return self.model
 
-    def _compute_multi_layer_anomaly_score(self, all_rec_errors, all_assoc_discs, alpha, beta):
+    def _compute_anomaly_score_batch(self, batch_x, outputs, all_series_attn, all_prior_attn, temperature=50):
         """
-        计算多层级异常分数
-        输入:
-            all_rec_errors: List of [B, L] - 每层的重构误差
-            all_assoc_discs: List of [B, L] - 每层的关联差异
-            alpha, beta: 权重
+        计算单个 batch 的异常分数（与原版 Anomaly Transformer 一致）
+
+        关键：
+        metric = softmax((-series_loss - prior_loss), dim=-1)
+        anomaly_score = metric * rec_loss
+
         返回:
-            combined_score: [B, L]
+            anomaly_score: [B, L] - 每个时间点的异常分数
         """
-        num_layers = len(all_rec_errors)
+        B, L, C = batch_x.shape
+        num_layers = len(all_series_attn)
 
-        # 方法1: 简单平均
-        avg_rec_error = sum(all_rec_errors) / num_layers
-        avg_assoc_disc = sum(all_assoc_discs) / num_layers
+        # 1. 计算重构误差 [B, L]
+        rec_loss = torch.mean((outputs - batch_x) ** 2, dim=-1)  # [B, L]
 
-        # 归一化
-        rec_mean, rec_std = avg_rec_error.mean(), avg_rec_error.std()
-        assoc_mean, assoc_std = avg_assoc_disc.mean(), avg_assoc_disc.std()
+        # 2. 计算多层关联差异
+        total_series_loss = 0.0
+        total_prior_loss = 0.0
 
-        rec_error_norm = (avg_rec_error - rec_mean) / (rec_std + 1e-8)
-        assoc_disc_norm = (avg_assoc_disc - assoc_mean) / (assoc_std + 1e-8)
+        for layer_idx in range(num_layers):
+            series_attn = all_series_attn[layer_idx]  # [B, H, L, L]
+            prior_attn = all_prior_attn[layer_idx]    # [B, H, L, L]
 
-        # 加权组合
-        combined_score = alpha * rec_error_norm + beta * assoc_disc_norm
+            # 归一化 Prior
+            prior_normalized = self._normalize_prior(prior_attn)
 
-        return combined_score
+            num_heads = series_attn.shape[1]
+
+            for h in range(num_heads):
+                s_attn = series_attn[:, h, :, :]      # [B, L, L]
+                p_attn = prior_normalized[:, h, :, :]  # [B, L, L]
+
+                if h == 0 and layer_idx == 0:
+                    # 第一层第一头：初始化
+                    series_loss = self.my_kl_loss(s_attn, p_attn.detach()) * temperature
+                    prior_loss = self.my_kl_loss(p_attn, s_attn.detach()) * temperature
+                else:
+                    # 累加
+                    series_loss = series_loss + self.my_kl_loss(s_attn, p_attn.detach()) * temperature
+                    prior_loss = prior_loss + self.my_kl_loss(p_attn, s_attn.detach()) * temperature
+
+        # series_loss, prior_loss: [B, L]
+
+        # 3. Softmax 加权（与原版一致）
+        # metric 越大表示该时间点 Series-Prior 差异越大（越可能是异常）
+        metric = torch.softmax((-series_loss - prior_loss), dim=-1)  # [B, L]
+
+        # 4. 加权重构误差
+        anomaly_score = metric * rec_loss  # [B, L]
+
+        return anomaly_score, series_loss, prior_loss
 
     def test(self, setting, test=0):
         """
-        增强版测试函数
-        支持多层级异常分数融合
+        测试函数（与原版 Anomaly Transformer 一致的异常分数计算）
         """
         test_data, test_loader = self._get_data(flag='test')
         train_data, train_loader = self._get_data(flag='train')
@@ -260,153 +285,81 @@ class Exp_TimesNet_AD_Enhanced(Exp_TimesNet_AD):
             os.makedirs(folder_path)
 
         self.model.eval()
-
-        # 获取参数
-        alpha = getattr(self.args, 'alpha', 0.5)
-        beta = getattr(self.args, 'beta', 0.5)
+        temperature = 50
         anomaly_ratio = getattr(self.args, 'anomaly_ratio', 1.0)
 
-        print("Computing anomaly scores on training set (normal data)...")
-        train_rec_errors_list = [[] for _ in range(self.args.e_layers)]
-        train_assoc_discs_list = [[] for _ in range(self.args.e_layers)]
+        # ========== 训练集统计 ==========
+        print("Computing anomaly scores on training set...")
+        train_energy_list = []
 
         with torch.no_grad():
             for i, (batch_x, _) in enumerate(train_loader):
                 batch_x = batch_x.float().to(self.device)
-
-                # 前向传播
                 outputs, all_series_attn, all_prior_attn = self.model(batch_x, None, None, None)
 
-                # 计算每层的异常分数
-                for layer_idx in range(self.args.e_layers):
-                    series_attn = all_series_attn[layer_idx]
-                    prior_attn = all_prior_attn[layer_idx]
+                anomaly_score, _, _ = self._compute_anomaly_score_batch(
+                    batch_x, outputs, all_series_attn, all_prior_attn, temperature
+                )
+                train_energy_list.append(anomaly_score.detach().cpu().numpy())
 
-                    # 重构误差
-                    rec_error = torch.mean((outputs - batch_x) ** 2, dim=-1)
+        train_energy = np.concatenate(train_energy_list, axis=0).reshape(-1)
+        print(f"Train scores computed: {train_energy.shape[0]} points")
 
-                    # 关联差异
-                    if prior_attn.dim() == 3:  # [H, L, L]
-                        prior_attn = prior_attn.unsqueeze(0).expand(series_attn.shape[0], -1, -1, -1)
+        # ========== 阈值集统计 ==========
+        print("Computing threshold on test set (for threshold selection)...")
+        thre_energy_list = []
 
-                    kl_div = 0.0
-                    for h in range(series_attn.shape[1]):
-                        s_attn = series_attn[:, h, :, :]
-                        p_attn = prior_attn[:, h, :, :]
-                        kl_div += (self.my_kl_loss(s_attn, p_attn) + self.my_kl_loss(p_attn, s_attn)) / 2.0
+        with torch.no_grad():
+            for i, (batch_x, _) in enumerate(test_loader):
+                batch_x = batch_x.float().to(self.device)
+                outputs, all_series_attn, all_prior_attn = self.model(batch_x, None, None, None)
 
-                    assoc_disc = kl_div / series_attn.shape[1]
+                anomaly_score, _, _ = self._compute_anomaly_score_batch(
+                    batch_x, outputs, all_series_attn, all_prior_attn, temperature
+                )
+                thre_energy_list.append(anomaly_score.detach().cpu().numpy())
 
-                    train_rec_errors_list[layer_idx].append(rec_error.detach().cpu().numpy())
-                    train_assoc_discs_list[layer_idx].append(assoc_disc.detach().cpu().numpy())
+        thre_energy = np.concatenate(thre_energy_list, axis=0).reshape(-1)
 
-        # 合并训练集分数
-        train_rec_errors_layers = [np.concatenate(train_rec_errors_list[i], axis=0).reshape(-1)
-                                    for i in range(self.args.e_layers)]
-        train_assoc_discs_layers = [np.concatenate(train_assoc_discs_list[i], axis=0).reshape(-1)
-                                     for i in range(self.args.e_layers)]
+        # 阈值选择（与原版一致）
+        combined_energy = np.concatenate([train_energy, thre_energy], axis=0)
+        threshold = np.percentile(combined_energy, 100 - anomaly_ratio)
+        print(f"Threshold: {threshold:.6f} (anomaly_ratio={anomaly_ratio}%)")
 
-        print(f"Train scores computed: {train_rec_errors_layers[0].shape[0]} points")
-
-        # 测试集
-        print("Computing anomaly scores on test set...")
-        test_rec_errors_list = [[] for _ in range(self.args.e_layers)]
-        test_assoc_discs_list = [[] for _ in range(self.args.e_layers)]
-        test_labels = []
+        # ========== 测试集评估 ==========
+        print("Evaluating on test set...")
+        test_energy_list = []
+        test_labels_list = []
 
         with torch.no_grad():
             for i, (batch_x, batch_y) in enumerate(test_loader):
                 batch_x = batch_x.float().to(self.device)
-
-                # 前向传播
                 outputs, all_series_attn, all_prior_attn = self.model(batch_x, None, None, None)
 
-                # 计算每层的异常分数
-                for layer_idx in range(self.args.e_layers):
-                    series_attn = all_series_attn[layer_idx]
-                    prior_attn = all_prior_attn[layer_idx]
+                anomaly_score, series_loss, prior_loss = self._compute_anomaly_score_batch(
+                    batch_x, outputs, all_series_attn, all_prior_attn, temperature
+                )
 
-                    # 重构误差
-                    rec_error = torch.mean((outputs - batch_x) ** 2, dim=-1)
+                test_energy_list.append(anomaly_score.detach().cpu().numpy())
+                test_labels_list.append(batch_y.numpy())
 
-                    # 关联差异
-                    if prior_attn.dim() == 3:
-                        prior_attn = prior_attn.unsqueeze(0).expand(series_attn.shape[0], -1, -1, -1)
+        test_energy = np.concatenate(test_energy_list, axis=0).reshape(-1)
+        test_labels = np.concatenate(test_labels_list, axis=0).reshape(-1)
 
-                    kl_div = 0.0
-                    for h in range(series_attn.shape[1]):
-                        s_attn = series_attn[:, h, :, :]
-                        p_attn = prior_attn[:, h, :, :]
-                        kl_div += (self.my_kl_loss(s_attn, p_attn) + self.my_kl_loss(p_attn, s_attn)) / 2.0
+        print(f"Test data: {test_energy.shape[0]} points, Labels: {test_labels.shape[0]} points")
 
-                    assoc_disc = kl_div / series_attn.shape[1]
-
-                    test_rec_errors_list[layer_idx].append(rec_error.detach().cpu().numpy())
-                    test_assoc_discs_list[layer_idx].append(assoc_disc.detach().cpu().numpy())
-
-                test_labels.append(batch_y.numpy())
-
-        # 合并测试集分数
-        test_rec_errors_layers = [np.concatenate(test_rec_errors_list[i], axis=0).reshape(-1)
-                                   for i in range(self.args.e_layers)]
-        test_assoc_discs_layers = [np.concatenate(test_assoc_discs_list[i], axis=0).reshape(-1)
-                                    for i in range(self.args.e_layers)]
-        test_labels = np.concatenate(test_labels, axis=0).reshape(-1)
-
-        print(f"Test data shapes - rec: {test_rec_errors_layers[0].shape}, labels: {test_labels.shape}")
-
-        # 简洁的每层统计（一行显示）
-        print("\nLayer Stats (Train/Test Assoc):")
-        layer_stats = []
-        for i in range(self.args.e_layers):
-            train_assoc = train_assoc_discs_layers[i].mean()
-            test_assoc = test_assoc_discs_layers[i].mean()
-            layer_stats.append(f"L{i+1}: {train_assoc:.3f}/{test_assoc:.3f}")
-        print("  " + ", ".join(layer_stats))
-
-        # 多层级融合异常分数
-        # 简单平均
-        train_rec_avg = np.mean(train_rec_errors_layers, axis=0)
-        train_assoc_avg = np.mean(train_assoc_discs_layers, axis=0)
-        test_rec_avg = np.mean(test_rec_errors_layers, axis=0)
-        test_assoc_avg = np.mean(test_assoc_discs_layers, axis=0)
-
-        # 联合归一化
-        all_rec = np.concatenate([train_rec_avg, test_rec_avg], axis=0)
-        all_assoc = np.concatenate([train_assoc_avg, test_assoc_avg], axis=0)
-
-        rec_mean, rec_std = all_rec.mean(), all_rec.std()
-        assoc_mean, assoc_std = all_assoc.mean(), all_assoc.std()
-
-        print(f"Combined Stats - Rec: {rec_mean:.4f}±{rec_std:.4f}, Assoc: {assoc_mean:.4f}±{assoc_std:.4f}")
-
-        # ⚠️ 关键诊断：如果Assoc < 0.1，立即警告
-        if assoc_mean < 0.1:
-            print(f"⚠️  WARNING: Association Discrepancy too low ({assoc_mean:.4f})! Prior-Series collapsed!")
-        elif assoc_mean > 1.5:
-            print(f"⚠️  WARNING: Association Discrepancy too high ({assoc_mean:.4f})! Training unstable!")
-
-        # 归一化
-        train_rec_norm = (train_rec_avg - rec_mean) / (rec_std + 1e-8)
-        train_assoc_norm = (train_assoc_avg - assoc_mean) / (assoc_std + 1e-8)
-        test_rec_norm = (test_rec_avg - rec_mean) / (rec_std + 1e-8)
-        test_assoc_norm = (test_assoc_avg - assoc_mean) / (assoc_std + 1e-8)
-
-        # 加权组合
-        train_energy = alpha * train_rec_norm + beta * train_assoc_norm
-        test_energy = alpha * test_rec_norm + beta * test_assoc_norm
-
-        # 阈值选择
-        combined_energy = np.concatenate([train_energy, test_energy], axis=0)
-        threshold = np.percentile(combined_energy, 100 - anomaly_ratio)
-
-        print(f"Threshold: {threshold:.4f} (α={alpha}, β={beta}, anomaly_ratio={anomaly_ratio}%)")
+        # 统计信息
+        print(f"\nEnergy Stats:")
+        print(f"  Train: mean={train_energy.mean():.6f}, std={train_energy.std():.6f}")
+        print(f"  Test:  mean={test_energy.mean():.6f}, std={test_energy.std():.6f}")
 
         # 预测
         pred = (test_energy > threshold).astype(int)
         gt = test_labels.astype(int)
 
-        # Point Adjustment
+        print(f"pred shape: {pred.shape}, gt shape: {gt.shape}")
+
+        # Point Adjustment（与原版一致）
         gt, pred = adjustment(gt, pred)
 
         # 评估
@@ -425,4 +378,4 @@ class Exp_TimesNet_AD_Enhanced(Exp_TimesNet_AD):
         np.save(folder_path + 'anomaly_score.npy', test_energy)
         np.save(folder_path + 'test_labels.npy', test_labels)
 
-        return
+        return accuracy, precision, recall, f_score

@@ -2,7 +2,7 @@
 增强版 TimesNet_AD 模型
 特性：
 1. 多层架构：在每个TimesNet层后都添加AnomalyBlock
-2. 动态Prior：混合静态高斯核和数据驱动Prior
+2. 动态Sigma：从数据投影生成，范围约束在[0,2]（与原版Anomaly Transformer一致）
 3. 多层级特征融合：聚合所有层的异常信号
 """
 
@@ -29,24 +29,22 @@ class Model(nn.Module):
         self.output_attention = configs.output_attention
         self.e_layers = configs.e_layers
 
-        # 配置参数
-        sigma_init_factor = getattr(configs, 'sigma_init_factor', 5.0)
-        self.dynamic_prior = getattr(configs, 'dynamic_prior', False)  # 默认关闭动态Prior
+        # 配置参数（sigma_init_factor 和 dynamic_prior 保留用于兼容性，但不再影响计算）
+        # 新实现始终使用动态 sigma（从数据投影）
         self.fusion_method = getattr(configs, 'fusion_method', 'weighted')  # 'weighted', 'attention', 'concat'
 
         # 1. 骨干网络
         self.timesnet = TimesNetOriginal(configs)
 
         # 2. 多层 AnomalyBlock（每层一个）
+        # 使用动态 sigma（从数据投影），与原版 Anomaly Transformer 一致
         self.anomaly_blocks = nn.ModuleList([
             AnomalyBlockEnhanced(
                 d_model=configs.d_model,
                 n_heads=configs.n_heads,
                 win_size=configs.seq_len,
                 d_ff=configs.d_ff,
-                dropout=configs.dropout,
-                sigma_init_factor=sigma_init_factor,
-                dynamic_prior=self.dynamic_prior
+                dropout=configs.dropout
             ) for _ in range(configs.e_layers)
         ])
 
