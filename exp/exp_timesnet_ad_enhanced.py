@@ -117,17 +117,12 @@ class Exp_TimesNet_AD_Enhanced(Exp_TimesNet_AD):
         dynamic_prior = getattr(self.args, 'dynamic_prior', True)
 
         print(f"Training Enhanced TimesNet_AD")
-        print(f"  - Multi-layer: {self.args.e_layers} layers")
-        print(f"  - Dynamic Prior: {dynamic_prior}")
-        print(f"  - Fusion Method: {getattr(self.args, 'fusion_method', 'weighted')}")
+        print(f"  - Layers: {self.args.e_layers}, Fusion: {getattr(self.args, 'fusion_method', 'weighted')}, Dynamic Prior: {dynamic_prior}")
         print(f"  - Minimax: k={k_val}, margin={margin_val}")
-        print("")
 
-        # 打印初始Sigma值
-        print("Initial Sigma values:")
-        for i, block in enumerate(self.model.anomaly_blocks):
-            sigma_values = block.prior_sigma.data.cpu().numpy()
-            print(f"  Layer {i+1}: mean={sigma_values.mean():.4f}, min={sigma_values.min():.4f}, max={sigma_values.max():.4f}")
+        # 只在第一个epoch前打印初始Sigma
+        sigma_means = [block.prior_sigma.data.mean().item() for block in self.model.anomaly_blocks]
+        print(f"  - Initial Sigma: {sigma_means}")
         print("")
 
         for epoch in range(self.args.train_epochs):
@@ -168,7 +163,7 @@ class Exp_TimesNet_AD_Enhanced(Exp_TimesNet_AD):
                 epoch_prior_loss.append(prior_margin_loss.item())
 
                 if (i + 1) % 100 == 0:
-                    print(f"\titers: {i + 1}, epoch: {epoch + 1} | rec_loss: {rec_loss.item():.7f}, series_loss: {series_loss.item():.7f}, prior_loss: {prior_margin_loss.item():.7f}")
+                    print(f"\titers: {i + 1}, epoch: {epoch + 1} | loss: {rec_loss.item():.7f}")
                     speed = (time.time() - time_now) / iter_count
                     left_time = speed * ((self.args.train_epochs - epoch) * len(train_loader) - i)
                     print(f'\tspeed: {speed:.4f}s/iter; left time: {left_time:.4f}s')
@@ -183,14 +178,11 @@ class Exp_TimesNet_AD_Enhanced(Exp_TimesNet_AD):
             # 验证集验证
             vali_loss = self.vali(vali_data, vali_loader, criterion)
 
-            print(f"Epoch: {epoch + 1}, Steps: {len(train_loader)} | Train Loss: {train_loss:.7f} Vali Loss: {vali_loss:.7f}")
-            print(f"  ↳ Series Loss: {avg_series_loss:.7f}, Prior Margin Loss: {avg_prior_loss:.7f}")
+            # 获取当前Sigma均值（用于监控）
+            sigma_means = [block.prior_sigma.data.mean().item() for block in self.model.anomaly_blocks]
 
-            # 打印当前Sigma值
-            print(f"  ↳ Current Sigma values:")
-            for i, block in enumerate(self.model.anomaly_blocks):
-                sigma_values = block.prior_sigma.data.cpu().numpy()
-                print(f"     Layer {i+1}: mean={sigma_values.mean():.4f}, min={sigma_values.min():.4f}, max={sigma_values.max():.4f}")
+            print(f"Epoch: {epoch + 1}, Steps: {len(train_loader)} | Train Loss: {train_loss:.7f} Vali Loss: {vali_loss:.7f}")
+            print(f"  ↳ S-Loss: {avg_series_loss:.4f}, P-Loss: {avg_prior_loss:.4f}, Sigma: {[f'{s:.2f}' for s in sigma_means]}")
 
             # 早停判断
             early_stopping(vali_loss, self.model, path)
@@ -201,12 +193,9 @@ class Exp_TimesNet_AD_Enhanced(Exp_TimesNet_AD):
             from utils.tools import adjust_learning_rate
             adjust_learning_rate(optimizer, epoch + 1, self.args)
 
-        # 打印最终Sigma值
-        print("\nFinal Sigma values after training:")
-        for i, block in enumerate(self.model.anomaly_blocks):
-            sigma_values = block.prior_sigma.data.cpu().numpy()
-            print(f"  Layer {i+1}: mean={sigma_values.mean():.4f}, min={sigma_values.min():.4f}, max={sigma_values.max():.4f}")
-        print("")
+        # 训练结束，简洁输出最终Sigma
+        sigma_final = [block.prior_sigma.data.mean().item() for block in self.model.anomaly_blocks]
+        print(f"\n✓ Training complete. Final Sigma: {[f'{s:.2f}' for s in sigma_final]}")
 
         # 加载最优模型
         best_model_path = path + '/' + 'checkpoint.pth'
@@ -354,16 +343,14 @@ class Exp_TimesNet_AD_Enhanced(Exp_TimesNet_AD):
 
         print(f"Test data shapes - rec: {test_rec_errors_layers[0].shape}, labels: {test_labels.shape}")
 
-        # 打印每层的统计信息
-        print("\nPer-layer Statistics:")
+        # 简洁的每层统计（一行显示）
+        print("\nLayer Stats (Train/Test Assoc):")
+        layer_stats = []
         for i in range(self.args.e_layers):
-            train_rec_mean = train_rec_errors_layers[i].mean()
-            train_assoc_mean = train_assoc_discs_layers[i].mean()
-            test_rec_mean = test_rec_errors_layers[i].mean()
-            test_assoc_mean = test_assoc_discs_layers[i].mean()
-            print(f"  Layer {i+1}:")
-            print(f"    Train - Rec: {train_rec_mean:.4f}, Assoc: {train_assoc_mean:.4f}")
-            print(f"    Test  - Rec: {test_rec_mean:.4f}, Assoc: {test_assoc_mean:.4f}")
+            train_assoc = train_assoc_discs_layers[i].mean()
+            test_assoc = test_assoc_discs_layers[i].mean()
+            layer_stats.append(f"L{i+1}: {train_assoc:.3f}/{test_assoc:.3f}")
+        print("  " + ", ".join(layer_stats))
 
         # 多层级融合异常分数
         # 简单平均
@@ -379,8 +366,13 @@ class Exp_TimesNet_AD_Enhanced(Exp_TimesNet_AD):
         rec_mean, rec_std = all_rec.mean(), all_rec.std()
         assoc_mean, assoc_std = all_assoc.mean(), all_assoc.std()
 
-        print(f"Combined Reconstruction Error Stats - Mean: {rec_mean:.4f}, Std: {rec_std:.4f}")
-        print(f"Combined Association Discrepancy Stats - Mean: {assoc_mean:.4f}, Std: {assoc_std:.4f}")
+        print(f"Combined Stats - Rec: {rec_mean:.4f}±{rec_std:.4f}, Assoc: {assoc_mean:.4f}±{assoc_std:.4f}")
+
+        # ⚠️ 关键诊断：如果Assoc < 0.1，立即警告
+        if assoc_mean < 0.1:
+            print(f"⚠️  WARNING: Association Discrepancy too low ({assoc_mean:.4f})! Prior-Series collapsed!")
+        elif assoc_mean > 1.5:
+            print(f"⚠️  WARNING: Association Discrepancy too high ({assoc_mean:.4f})! Training unstable!")
 
         # 归一化
         train_rec_norm = (train_rec_avg - rec_mean) / (rec_std + 1e-8)
@@ -389,26 +381,18 @@ class Exp_TimesNet_AD_Enhanced(Exp_TimesNet_AD):
         test_assoc_norm = (test_assoc_avg - assoc_mean) / (assoc_std + 1e-8)
 
         # 加权组合
-        print(f"Anomaly Score Weighting: alpha={alpha}, beta={beta}")
         train_energy = alpha * train_rec_norm + beta * train_assoc_norm
         test_energy = alpha * test_rec_norm + beta * test_assoc_norm
-
-        print(f"Final Score Stats - Train Mean: {train_energy.mean():.4f}, Std: {train_energy.std():.4f}")
-        print(f"Final Score Stats - Test Mean: {test_energy.mean():.4f}, Std: {test_energy.std():.4f}")
 
         # 阈值选择
         combined_energy = np.concatenate([train_energy, test_energy], axis=0)
         threshold = np.percentile(combined_energy, 100 - anomaly_ratio)
 
-        print(f"Threshold (based on combined distribution): {threshold:.4f}")
-        print(f"Anomaly ratio: {anomaly_ratio}%")
+        print(f"Threshold: {threshold:.4f} (α={alpha}, β={beta}, anomaly_ratio={anomaly_ratio}%)")
 
         # 预测
         pred = (test_energy > threshold).astype(int)
         gt = test_labels.astype(int)
-
-        print(f"Prediction shape: {pred.shape}")
-        print(f"Ground truth shape: {gt.shape}")
 
         # Point Adjustment
         gt, pred = adjustment(gt, pred)
@@ -417,11 +401,13 @@ class Exp_TimesNet_AD_Enhanced(Exp_TimesNet_AD):
         accuracy = accuracy_score(gt, pred)
         precision, recall, f_score, _ = precision_recall_fscore_support(gt, pred, average='binary')
 
-        print("\nFinal Metrics with Point Adjustment:")
-        print(f"Accuracy : {accuracy:.4f}")
-        print(f"Precision: {precision:.4f}")
-        print(f"Recall   : {recall:.4f}")
-        print(f"F1 Score : {f_score:.4f}")
+        print(f"\n{'='*60}")
+        print(f"Final Results:")
+        print(f"  Accuracy : {accuracy:.4f}")
+        print(f"  Precision: {precision:.4f}")
+        print(f"  Recall   : {recall:.4f}")
+        print(f"  F1 Score : {f_score:.4f}")
+        print(f"{'='*60}\n")
 
         # 保存结果
         np.save(folder_path + 'anomaly_score.npy', test_energy)
