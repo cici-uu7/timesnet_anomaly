@@ -37,7 +37,7 @@ python run.py \
   --alpha 0.6 \
   --beta 0.4 \
   --sigma_init_factor 5.0 \
-  --dynamic_prior True \
+  --dynamic_prior  \
   --fusion_method weighted \
   --output_attention
 
