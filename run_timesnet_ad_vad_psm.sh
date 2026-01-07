@@ -44,7 +44,7 @@ python run.py \
   --anomaly_ratio 1.0 \
   --batch_size 128 \
   --learning_rate 0.0001 \
-  --train_epochs 10 \
+  --train_epochs 4 \
   --patience 5 \
   --lradj type3 \
   --beta 0.3 \

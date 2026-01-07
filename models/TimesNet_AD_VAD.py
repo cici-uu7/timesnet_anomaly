@@ -156,11 +156,15 @@ class VariableAssociationModule(nn.Module):
         x_std = x.std(dim=1, keepdim=True) + 1e-8
         x_norm = (x - x_mean) / x_std
 
-        # 计算相关性矩阵
-        corr = torch.bmm(x_norm.transpose(1, 2), x_norm) / L
+        # 计算相关性矩阵 (Pearson correlation)
+        # corr[i,j] ≈ correlation between var_i and var_j
+        # corr[i,i] ≈ 1.0 (self-correlation)
+        corr = torch.bmm(x_norm.transpose(1, 2), x_norm) / L  # [B, V, V]
 
-        # 转为概率分布
-        series = F.softmax(corr, dim=-1)
+        # 修复: 不用 softmax (会把对角线拉平到 1/V)
+        # 改用平方归一化: 放大差异,同时保持对角线突出
+        series = corr ** 2  # [0, 1], 强相关→接近1, 弱相关→接近0
+        series = series / (series.sum(dim=-1, keepdim=True) + 1e-8)  # 归一化为概率分布
 
         return series
 

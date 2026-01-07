@@ -131,14 +131,17 @@ class Exp_TimesNet_AD_VAD(Exp_Basic):
                 x_std = batch_x.std(dim=1, keepdim=True) + 1e-8
                 x_norm = (batch_x - x_mean) / x_std
 
-                # 计算相关性矩阵
+                # 计算相关性矩阵 (Pearson correlation)
                 corr = torch.bmm(x_norm.transpose(1, 2), x_norm) / L
                 all_corr.append(corr)
 
         all_corr = torch.cat(all_corr, dim=0)
         statistical_prior = all_corr.mean(dim=0)
-        # 取绝对值（正负相关都算关联）
-        statistical_prior = torch.abs(statistical_prior)
+
+        # 修复: 和 Series 保持一致的处理方式
+        # 平方后归一化（放大相关性差异）
+        statistical_prior = statistical_prior ** 2
+        statistical_prior = statistical_prior / (statistical_prior.sum(dim=-1, keepdim=True) + 1e-8)
 
         return statistical_prior
 
@@ -453,16 +456,103 @@ class Exp_TimesNet_AD_VAD(Exp_Basic):
         improvement = (f_score - f_rec) * 100
         print(f"  VAD improvement: {improvement:+.2f}%")
 
+        # ========== 调试分析：Prior 质量检查 ==========
+        print("\n" + "=" * 60)
+        print("[Debug] Prior Matrix Analysis:")
+        prior_matrix = self.model.vad_module.prior.cpu().numpy()
+        print(f"  Prior shape: {prior_matrix.shape}")
+        print(f"  Prior mean: {prior_matrix.mean():.6f}")
+        print(f"  Prior std: {prior_matrix.std():.6f}")
+        print(f"  Prior max correlation: {prior_matrix.max():.6f}")
+        print(f"  Prior min correlation: {prior_matrix.min():.6f}")
+
+        # 找出相关性最强和最弱的变量对
+        prior_no_diag = prior_matrix.copy()
+        np.fill_diagonal(prior_no_diag, 0)
+        max_idx = np.unravel_index(np.argmax(prior_no_diag), prior_no_diag.shape)
+        min_idx = np.unravel_index(np.argmin(prior_no_diag), prior_no_diag.shape)
+        print(f"  Strongest correlation: Var {max_idx[0]} <-> Var {max_idx[1]} = {prior_matrix[max_idx]:.6f}")
+        print(f"  Weakest correlation:   Var {min_idx[0]} <-> Var {min_idx[1]} = {prior_matrix[min_idx]:.6f}")
+
+        # ========== 调试分析：VAD 原始值检查 ==========
+        print("\n" + "=" * 60)
+        print("[Debug] VAD Raw Values:")
+        print(f"  Train VAD raw: mean={train_vad.mean():.6f}, std={train_vad.std():.6f}")
+        print(f"  Train VAD raw: min={train_vad.min():.6f}, max={train_vad.max():.6f}")
+        print(f"  Test VAD raw:  mean={test_vad.mean():.6f}, std={test_vad.std():.6f}")
+        print(f"  Test VAD raw:  min={test_vad.min():.6f}, max={test_vad.max():.6f}")
+
+        # 检查极端值
+        extreme_threshold = vad_mean + 10 * vad_std
+        extreme_ratio_train = np.mean(train_vad > extreme_threshold)
+        extreme_ratio_test = np.mean(test_vad > extreme_threshold)
+        print(f"  Train extreme VAD (>mean+10*std): {extreme_ratio_train:.2%}")
+        print(f"  Test extreme VAD (>mean+10*std):  {extreme_ratio_test:.2%}")
+
+        # ========== 调试分析：Series vs Prior 差异 ==========
+        print("\n" + "=" * 60)
+        print("[Debug] Series vs Prior (KL Divergence Analysis):")
+
+        # 采样几个批次分析 Series
+        sample_series_list = []
+        sample_labels_list = []
+        with torch.no_grad():
+            for i, (batch_x, batch_y) in enumerate(test_loader):
+                if i >= 5:  # 只取前 5 个批次
+                    break
+                batch_x = batch_x.float().to(self.device)
+                _, _, series = self.model(batch_x, None, None, None)
+                sample_series_list.append(series.cpu().numpy())
+                sample_labels_list.append(batch_y.numpy())
+
+        if len(sample_series_list) > 0:
+            sample_series = np.concatenate(sample_series_list, axis=0)  # [N, V, V]
+            sample_labels = np.concatenate(sample_labels_list, axis=0)  # [N, win_size]
+
+            # 修复: 取每个窗口的最大标签 (如果窗口内有异常点,就认为是异常窗口)
+            sample_labels = sample_labels.max(axis=1)  # [N, win_size] -> [N]
+
+            # 区分正常和异常样本
+            normal_mask = sample_labels == 0
+            anomaly_mask = sample_labels > 0
+
+            if normal_mask.sum() > 0 and anomaly_mask.sum() > 0:
+                # 计算平均 Series
+                series_normal = sample_series[normal_mask].mean(axis=0)  # [V, V]
+                series_anomaly = sample_series[anomaly_mask].mean(axis=0)  # [V, V]
+
+                print(f"  Normal samples Series: mean={series_normal.mean():.6f}, std={series_normal.std():.6f}")
+                print(f"  Anomaly samples Series: mean={series_anomaly.mean():.6f}, std={series_anomaly.std():.6f}")
+
+                # Series 和 Prior 的差异
+                diff_normal = np.abs(series_normal - prior_matrix).mean()
+                diff_anomaly = np.abs(series_anomaly - prior_matrix).mean()
+                print(f"  |Series - Prior| for Normal:  {diff_normal:.6f}")
+                print(f"  |Series - Prior| for Anomaly: {diff_anomaly:.6f}")
+                print(f"  Ratio (Anomaly/Normal):       {diff_anomaly / (diff_normal + 1e-8):.2f}x")
+
         # ========== VAD 效果分析 ==========
-        print("\n[Analysis] VAD Boost Effect:")
+        print("\n" + "=" * 60)
+        print("[Analysis] VAD Boost Effect:")
         # 统计 VAD 在异常点和正常点的差异
         anomaly_mask = test_labels > 0
         if anomaly_mask.sum() > 0:
             vad_boost_anomaly = test_vad_boost[anomaly_mask].mean()
             vad_boost_normal = test_vad_boost[~anomaly_mask].mean()
+
+            # 额外统计：原始 VAD 值
+            vad_raw_anomaly = test_vad[anomaly_mask].mean()
+            vad_raw_normal = test_vad[~anomaly_mask].mean()
+
+            print(f"  Anomaly points VAD raw:   {vad_raw_anomaly:.4f}")
+            print(f"  Normal points VAD raw:    {vad_raw_normal:.4f}")
+            print(f"  Ratio (Anomaly/Normal):   {vad_raw_anomaly / (vad_raw_normal + 1e-8):.2f}x")
+            print(f"")
             print(f"  Anomaly points VAD boost: {vad_boost_anomaly:.4f}")
             print(f"  Normal points VAD boost:  {vad_boost_normal:.4f}")
             print(f"  Ratio (Anomaly/Normal):   {vad_boost_anomaly / (vad_boost_normal + 1e-8):.2f}x")
+
+        print("=" * 60)
 
         # 保存结果
         np.save(folder_path + 'anomaly_score.npy', test_energy)
