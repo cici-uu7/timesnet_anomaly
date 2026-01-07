@@ -49,7 +49,7 @@ python run.py \
   --lradj type3 \
   --alpha 0.7 \
   --beta 0.3 \
-  --prior_lambda 0.5 \
+  --prior_lambda 0 \
   --dropout 0.1
 
 echo ""
