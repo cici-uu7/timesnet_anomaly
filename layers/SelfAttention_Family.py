@@ -3,8 +3,15 @@ import torch.nn as nn
 import numpy as np
 from math import sqrt
 from utils.masking import TriangularCausalMask, ProbMask
-from reformer_pytorch import LSHSelfAttention
-from einops import rearrange, repeat
+try:
+    from reformer_pytorch import LSHSelfAttention
+except ImportError:
+    LSHSelfAttention = None
+try:
+    from einops import rearrange, repeat
+except ImportError:
+    rearrange = None
+    repeat = None
 
 
 class DSAttention(nn.Module):

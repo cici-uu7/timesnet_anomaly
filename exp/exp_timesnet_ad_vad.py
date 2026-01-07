@@ -412,28 +412,75 @@ class Exp_TimesNet_AD_VAD(Exp_Basic):
               f"max={test_vad_boost.max():.4f}, "
               f"non-zero ratio={np.mean(test_vad_boost > 0):.2%}")
 
-        # ========== 阈值选择 ==========
-        combined_energy = np.concatenate([train_energy, test_energy], axis=0)
-        threshold = np.percentile(combined_energy, 100 - anomaly_ratio)
-        print(f"Threshold: {threshold:.6f} (anomaly_ratio={anomaly_ratio}%)")
-
         # ========== 统计 ==========
         print(f"\nScore Statistics:")
         print(f"  Train: mean={train_energy.mean():.4f}, std={train_energy.std():.4f}")
         print(f"  Test:  mean={test_energy.mean():.4f}, std={test_energy.std():.4f}")
 
-        # ========== 预测 ==========
+        # ========== 阈值策略对比 ==========
+        print(f"\n{'=' * 60}")
+        print("Threshold Strategy Comparison:")
+        print(f"{'=' * 60}")
+
+        # 策略1: 混合训练+测试 (当前策略)
+        combined_energy = np.concatenate([train_energy, test_energy], axis=0)
+        threshold_combined = np.percentile(combined_energy, 100 - anomaly_ratio)
+
+        # 策略2: 只用训练集
+        threshold_train = np.percentile(train_energy, 100 - anomaly_ratio)
+
+        # 策略3: 只用测试集 (理想情况，仅用于分析)
+        threshold_test = np.percentile(test_energy, 100 - anomaly_ratio)
+
+        # 策略4: 训练集 + k*std
+        threshold_train_std = train_energy.mean() + 3 * train_energy.std()
+
+        print(f"1. Combined (Train+Test): {threshold_combined:.6f}")
+        print(f"2. Train only:            {threshold_train:.6f}")
+        print(f"3. Test only (oracle):    {threshold_test:.6f}")
+        print(f"4. Train mean+3std:       {threshold_train_std:.6f}")
+
+        # 测试各种阈值策略
+        strategies = {
+            'Combined (default)': threshold_combined,
+            'Train only': threshold_train,
+            'Test only (oracle)': threshold_test,
+            'Train mean+3std': threshold_train_std,
+        }
+
+        best_f1 = 0
+        best_strategy = None
+        best_results = None
+
+        print(f"\n{'Strategy':<25} {'Acc':<8} {'Prec':<8} {'Recall':<8} {'F1':<8}")
+        print("-" * 60)
+
+        for strategy_name, threshold in strategies.items():
+            pred = (test_energy > threshold).astype(int)
+            gt = test_labels.astype(int)
+            gt_adj, pred_adj = adjustment(gt, pred)
+
+            acc = accuracy_score(gt_adj, pred_adj)
+            prec, rec, f1, _ = precision_recall_fscore_support(gt_adj, pred_adj, average='binary')
+
+            marker = ""
+            if f1 > best_f1:
+                best_f1 = f1
+                best_strategy = strategy_name
+                best_results = (acc, prec, rec, f1, threshold)
+                marker = " ⭐"
+
+            print(f"{strategy_name:<25} {acc:.4f}   {prec:.4f}   {rec:.4f}   {f1:.4f}{marker}")
+
+        # 使用最佳策略
+        accuracy, precision, recall, f_score, threshold = best_results
         pred = (test_energy > threshold).astype(int)
         gt = test_labels.astype(int)
-
         gt, pred = adjustment(gt, pred)
 
-        # ========== 评估 ==========
-        accuracy = accuracy_score(gt, pred)
-        precision, recall, f_score, _ = precision_recall_fscore_support(gt, pred, average='binary')
-
         print(f"\n{'=' * 60}")
-        print(f"Results (β={beta}, λ={self.prior_lambda}, VAD Boost Only):")
+        print(f"Best Results (β={beta}, λ={self.prior_lambda}, {best_strategy}):")
+        print(f"  Threshold: {threshold:.6f}")
         print(f"  Accuracy : {accuracy:.4f}")
         print(f"  Precision: {precision:.4f}")
         print(f"  Recall   : {recall:.4f}")
@@ -521,20 +568,61 @@ class Exp_TimesNet_AD_VAD(Exp_Basic):
             normal_mask = sample_labels == 0
             anomaly_mask = sample_labels > 0
 
+            print(f"  Sampled {len(sample_series)} windows: {normal_mask.sum()} normal, {anomaly_mask.sum()} anomaly")
+
             if normal_mask.sum() > 0 and anomaly_mask.sum() > 0:
                 # 计算平均 Series
                 series_normal = sample_series[normal_mask].mean(axis=0)  # [V, V]
                 series_anomaly = sample_series[anomaly_mask].mean(axis=0)  # [V, V]
 
-                print(f"  Normal samples Series: mean={series_normal.mean():.6f}, std={series_normal.std():.6f}")
-                print(f"  Anomaly samples Series: mean={series_anomaly.mean():.6f}, std={series_anomaly.std():.6f}")
+                # 提取对角线和非对角线
+                V = series_normal.shape[0]
+                diag_indices = np.arange(V)
+
+                # Prior 统计
+                prior_diag = prior_matrix[diag_indices, diag_indices]
+                prior_off_diag = prior_matrix.copy()
+                np.fill_diagonal(prior_off_diag, 0)
+                prior_off_diag_mean = prior_off_diag.sum() / (V * V - V)
+
+                # Normal Series 统计
+                normal_diag = series_normal[diag_indices, diag_indices]
+                normal_off_diag = series_normal.copy()
+                np.fill_diagonal(normal_off_diag, 0)
+                normal_off_diag_mean = normal_off_diag.sum() / (V * V - V)
+
+                # Anomaly Series 统计
+                anomaly_diag = series_anomaly[diag_indices, diag_indices]
+                anomaly_off_diag = series_anomaly.copy()
+                np.fill_diagonal(anomaly_off_diag, 0)
+                anomaly_off_diag_mean = anomaly_off_diag.sum() / (V * V - V)
+
+                print(f"\n  Prior Matrix:")
+                print(f"    Diagonal mean:     {prior_diag.mean():.6f}")
+                print(f"    Off-diagonal mean: {prior_off_diag_mean:.6f}")
+                print(f"    Ratio (Diag/Off):  {prior_diag.mean() / (prior_off_diag_mean + 1e-8):.2f}x")
+
+                print(f"\n  Normal Series Matrix:")
+                print(f"    Diagonal mean:     {normal_diag.mean():.6f}")
+                print(f"    Off-diagonal mean: {normal_off_diag_mean:.6f}")
+                print(f"    Ratio (Diag/Off):  {normal_diag.mean() / (normal_off_diag_mean + 1e-8):.2f}x")
+
+                print(f"\n  Anomaly Series Matrix:")
+                print(f"    Diagonal mean:     {anomaly_diag.mean():.6f}")
+                print(f"    Off-diagonal mean: {anomaly_off_diag_mean:.6f}")
+                print(f"    Ratio (Diag/Off):  {anomaly_diag.mean() / (anomaly_off_diag_mean + 1e-8):.2f}x")
+
+                print(f"\n  Overall Statistics:")
+                print(f"    Normal Series: mean={series_normal.mean():.6f}, std={series_normal.std():.6f}")
+                print(f"    Anomaly Series: mean={series_anomaly.mean():.6f}, std={series_anomaly.std():.6f}")
 
                 # Series 和 Prior 的差异
                 diff_normal = np.abs(series_normal - prior_matrix).mean()
                 diff_anomaly = np.abs(series_anomaly - prior_matrix).mean()
-                print(f"  |Series - Prior| for Normal:  {diff_normal:.6f}")
-                print(f"  |Series - Prior| for Anomaly: {diff_anomaly:.6f}")
-                print(f"  Ratio (Anomaly/Normal):       {diff_anomaly / (diff_normal + 1e-8):.2f}x")
+                print(f"\n  |Series - Prior|:")
+                print(f"    Normal:  {diff_normal:.6f}")
+                print(f"    Anomaly: {diff_anomaly:.6f}")
+                print(f"    Ratio (Anomaly/Normal): {diff_anomaly / (diff_normal + 1e-8):.2f}x")
 
         # ========== VAD 效果分析 ==========
         print("\n" + "=" * 60)

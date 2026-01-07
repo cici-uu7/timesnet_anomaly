@@ -7,13 +7,24 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from sklearn.preprocessing import StandardScaler
 from utils.timefeatures import time_features
-from data_provider.m4 import M4Dataset, M4Meta
+try:
+    from data_provider.m4 import M4Dataset, M4Meta
+except ImportError:
+    M4Dataset = None
+    M4Meta = None
 from data_provider.uea import subsample, interpolate_missing, Normalizer
-from sktime.datasets import load_from_tsfile_to_dataframe
+try:
+    from sktime.datasets import load_from_tsfile_to_dataframe
+except ImportError:
+    load_from_tsfile_to_dataframe = None
 import warnings
 from utils.augmentation import run_augmentation_single
-from datasets import load_dataset
-from huggingface_hub import hf_hub_download
+try:
+    from datasets import load_dataset
+    from huggingface_hub import hf_hub_download
+except ImportError:
+    load_dataset = None
+    hf_hub_download = None
 warnings.filterwarnings('ignore')
 
 HUGGINGFACE_REPO = "thuml/Time-Series-Library"
