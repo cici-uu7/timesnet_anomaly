@@ -466,13 +466,18 @@ class Exp_TimesNet_AD_VAD(Exp_Basic):
         print(f"  Prior max correlation: {prior_matrix.max():.6f}")
         print(f"  Prior min correlation: {prior_matrix.min():.6f}")
 
-        # 找出相关性最强和最弱的变量对
+        # 找出相关性最强和最弱的变量对（排除对角线）
         prior_no_diag = prior_matrix.copy()
-        np.fill_diagonal(prior_no_diag, 0)
+        np.fill_diagonal(prior_no_diag, -np.inf)  # 用-inf而不是0，这样不会影响argmin
         max_idx = np.unravel_index(np.argmax(prior_no_diag), prior_no_diag.shape)
-        min_idx = np.unravel_index(np.argmin(prior_no_diag), prior_no_diag.shape)
+
+        prior_no_diag_for_min = prior_matrix.copy()
+        np.fill_diagonal(prior_no_diag_for_min, np.inf)  # 用inf排除对角线
+        min_idx = np.unravel_index(np.argmin(prior_no_diag_for_min), prior_no_diag_for_min.shape)
+
         print(f"  Strongest correlation: Var {max_idx[0]} <-> Var {max_idx[1]} = {prior_matrix[max_idx]:.6f}")
         print(f"  Weakest correlation:   Var {min_idx[0]} <-> Var {min_idx[1]} = {prior_matrix[min_idx]:.6f}")
+        print(f"  Diagonal mean (self-correlation): {np.diag(prior_matrix).mean():.6f}")
 
         # ========== 调试分析：VAD 原始值检查 ==========
         print("\n" + "=" * 60)

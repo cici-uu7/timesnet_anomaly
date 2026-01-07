@@ -132,9 +132,15 @@ class VariableAssociationModule(nn.Module):
         设置 Prior 矩阵
 
         Args:
-            prior_matrix: [V, V] 变量间的期望关联
+            prior_matrix: [V, V] 变量间的期望关联（已经是平方归一化后的概率分布）
+
+        注意: Prior 应该已经和 Series 使用相同的归一化方式（平方归一化）
+              不要再用 softmax，否则会把对角线值（自相关）拉低
         """
-        prior = F.softmax(prior_matrix, dim=-1)
+        # 确保是概率分布（每行和为1）
+        # 不用softmax，因为softmax会破坏对角线的高值
+        prior = prior_matrix / (prior_matrix.sum(dim=-1, keepdim=True) + 1e-8)
+
         # 需要重新注册 buffer
         if 'prior' in self._buffers:
             del self._buffers['prior']
