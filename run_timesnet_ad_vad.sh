@@ -47,7 +47,6 @@ python run.py \
   --train_epochs 10 \
   --patience 5 \
   --lradj type3 \
-  --alpha 0.7 \
   --beta 0.3 \
   --prior_lambda 0 \
   --dropout 0.1
