@@ -56,22 +56,27 @@ class Exp_TimesNet_AD_V2(Exp_Basic):
         return torch.sum(res, dim=-1)
 
     def _normalize_prior(self, prior_attn):
-        """归一化 Prior 注意力"""
-        prior_sum = torch.sum(prior_attn, dim=-1, keepdim=True)
-        prior_normalized = prior_attn / (prior_sum + 1e-8)
-        return prior_normalized
+        """归一化 Prior 注意力 (prior_attn 已在模型中归一化)"""
+        # V2 模型已在内部归一化，这里直接返回
+        return prior_attn
 
     def _compute_association_discrepancy(self, series_attn, prior_attn):
         """
         计算关联差异
 
         Args:
-            series_attn: [B, H, L, L]
-            prior_attn: [B, H, L, L]
+            series_attn: [B, H, L, L] 或 list
+            prior_attn: [B, H, L, L] 或 list
         Returns:
             discrepancy: [B, L] 每个时间步的关联差异
         """
-        prior_normalized = self._normalize_prior(prior_attn)
+        # 处理 list 情况
+        if isinstance(series_attn, list):
+            series_attn = series_attn[0]
+        if isinstance(prior_attn, list):
+            prior_attn = prior_attn[0]
+
+        prior_normalized = prior_attn  # 已在模型中归一化
         num_heads = series_attn.shape[1]
 
         # 计算每个 head 的 KL 散度
@@ -92,8 +97,15 @@ class Exp_TimesNet_AD_V2(Exp_Basic):
     def _compute_minimax_loss(self, series_attn, prior_attn):
         """
         计算 Minimax 损失 (用于训练)
+        V2 只有一层 AnomalyAttention，series_attn/prior_attn 可能是 list 或 tensor
         """
-        prior_normalized = self._normalize_prior(prior_attn)
+        # 处理 list 情况 (output_attention=True 时返回 list)
+        if isinstance(series_attn, list):
+            series_attn = series_attn[0]
+        if isinstance(prior_attn, list):
+            prior_attn = prior_attn[0]
+
+        prior_normalized = prior_attn  # 已在模型中归一化
         num_heads = series_attn.shape[1]
 
         series_loss = 0.0

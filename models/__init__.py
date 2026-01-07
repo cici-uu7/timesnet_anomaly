@@ -9,6 +9,7 @@ from . import TimesNet_AD
 from . import TimesNet_AD_Enhanced
 from . import TimesNet_AD_T
 from . import TimesNet_AD_V2
+from . import TimesNet_AD_VAD
 
 # Optional models - gracefully skip if dependencies are missing
 try:
@@ -60,5 +61,5 @@ __all__ = [
     'MambaSimple', 'TemporalFusionTransformer', 'SCINet', 'PAttn', 'TimeXer',
     'WPMixer', 'MultiPatchFormer', 'KANAD', 'MSGNet', 'TimeFilter',
     'Sundial', 'TimeMoE', 'Chronos', 'Moirai', 'TiRex', 'TimesFM', 'Chronos2',
-    'TimesNet_AD', 'TimesNet_AD_Enhanced', 'TimesNet_AD_T', 'TimesNet_AD_V2'
+    'TimesNet_AD', 'TimesNet_AD_Enhanced', 'TimesNet_AD_T', 'TimesNet_AD_V2', 'TimesNet_AD_VAD'
 ]

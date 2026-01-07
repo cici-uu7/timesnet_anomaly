@@ -13,6 +13,7 @@ from exp.exp_timesnet_ad import Exp_TimesNet_AD
 from exp.exp_timesnet_ad_enhanced import Exp_TimesNet_AD_Enhanced
 from exp.exp_timesnet_ad_t import Exp_TimesNet_AD_T
 from exp.exp_timesnet_ad_v2 import Exp_TimesNet_AD_V2
+from exp.exp_timesnet_ad_vad import Exp_TimesNet_AD_VAD
 import random
 import numpy as np
 
@@ -66,6 +67,13 @@ if __name__ == '__main__':
     parser.add_argument('--dynamic_prior', action='store_true', default=False, help='Enable dynamic prior (hybrid static+dynamic)')
     parser.add_argument('--fusion_method', type=str, default='weighted', choices=['weighted', 'attention', 'concat'],
                         help='Multi-level feature fusion method: weighted, attention, concat')
+
+    # TimesNet_AD_VAD parameters
+    parser.add_argument('--prior_type', type=str, default='distance', choices=['distance', 'physical', 'statistical'],
+                        help='VAD Prior type: distance (index-based), physical (domain knowledge), statistical (from data)')
+    parser.add_argument('--prior_sigma', type=float, default=3.0, help='Sigma for distance-based Prior')
+    parser.add_argument('--prior_lambda', type=float, default=0.5,
+                        help='Prior fusion: hybrid = lambda*physical + (1-lambda)*statistical. 0=pure stat, 1=pure phys')
 
     # model define
     parser.add_argument('--expand', type=int, default=2, help='expansion factor for Mamba')
@@ -207,6 +215,8 @@ if __name__ == '__main__':
             Exp = Exp_TimesNet_AD_T
         elif args.model == 'TimesNet_AD_V2':
             Exp = Exp_TimesNet_AD_V2
+        elif args.model == 'TimesNet_AD_VAD':
+            Exp = Exp_TimesNet_AD_VAD
         else:
             Exp = Exp_Anomaly_Detection
     elif args.task_name == 'classification':
