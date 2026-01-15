@@ -1,0 +1,216 @@
+============================================================
+Training TimesNet_AD_VAD
+  - Training: Pure reconstruction loss (TimesNet unchanged)
+  - Prior: λ=0.0 (hybrid)
+============================================================
+        iters: 100, epoch: 1 | loss: 0.0796687
+        speed: 0.3075s/iter; left time: 1242.5355s
+        iters: 200, epoch: 1 | loss: 0.0455471
+        speed: 0.2589s/iter; left time: 1020.3980s
+        iters: 300, epoch: 1 | loss: 0.0360075
+        speed: 0.2587s/iter; left time: 993.5627s
+        iters: 400, epoch: 1 | loss: 0.0250512
+        speed: 0.2595s/iter; left time: 970.9359s
+        iters: 500, epoch: 1 | loss: 0.0259704
+        speed: 0.2589s/iter; left time: 942.6078s
+        iters: 600, epoch: 1 | loss: 0.0195412
+        speed: 0.2591s/iter; left time: 917.4127s
+        iters: 700, epoch: 1 | loss: 0.0245794
+        speed: 0.2587s/iter; left time: 890.2322s
+        iters: 800, epoch: 1 | loss: 0.0157549
+        speed: 0.2589s/iter; left time: 865.1122s
+        iters: 900, epoch: 1 | loss: 0.0144954
+        speed: 0.2590s/iter; left time: 839.3738s
+        iters: 1000, epoch: 1 | loss: 0.0183016
+        speed: 0.2586s/iter; left time: 812.2837s
+Epoch: 1 cost time: 269.18s
+Epoch: 1, Steps: 1035 | Train Loss: 0.0381907 Vali Loss: 0.0141722
+Validation loss decreased (inf --> 0.014172).  Saving model ...
+Updating learning rate to 0.0001
+        iters: 100, epoch: 2 | loss: 0.0124393
+        speed: 0.7417s/iter; left time: 2229.5122s
+        iters: 200, epoch: 2 | loss: 0.0114168
+        speed: 0.2590s/iter; left time: 752.6154s
+        iters: 300, epoch: 2 | loss: 0.0102923
+        speed: 0.2594s/iter; left time: 727.7391s
+        iters: 400, epoch: 2 | loss: 0.0121565
+        speed: 0.2588s/iter; left time: 700.4134s
+        iters: 500, epoch: 2 | loss: 0.0134198
+        speed: 0.2589s/iter; left time: 674.8105s
+        iters: 600, epoch: 2 | loss: 0.0130631
+        speed: 0.2590s/iter; left time: 648.9869s
+        iters: 700, epoch: 2 | loss: 0.0100703
+        speed: 0.2578s/iter; left time: 620.1890s
+        iters: 800, epoch: 2 | loss: 0.0088614
+        speed: 0.2589s/iter; left time: 596.9534s
+        iters: 900, epoch: 2 | loss: 0.0091348
+        speed: 0.2589s/iter; left time: 571.0804s
+        iters: 1000, epoch: 2 | loss: 0.0113288
+        speed: 0.2598s/iter; left time: 547.0365s
+Epoch: 2 cost time: 268.20s
+Epoch: 2, Steps: 1035 | Train Loss: 0.0138913 Vali Loss: 0.0076042
+Validation loss decreased (0.014172 --> 0.007604).  Saving model ...
+Updating learning rate to 0.0001
+        iters: 100, epoch: 3 | loss: 0.0088274
+        speed: 0.7428s/iter; left time: 1464.0955s
+        iters: 200, epoch: 3 | loss: 0.0084621
+        speed: 0.2586s/iter; left time: 483.8759s
+        iters: 300, epoch: 3 | loss: 0.0086054
+        speed: 0.2597s/iter; left time: 460.0172s
+        iters: 400, epoch: 3 | loss: 0.0130959
+        speed: 0.2592s/iter; left time: 433.1395s
+        iters: 500, epoch: 3 | loss: 0.0104912
+        speed: 0.2585s/iter; left time: 406.0711s
+        iters: 600, epoch: 3 | loss: 0.0069277
+        speed: 0.2596s/iter; left time: 381.8039s
+        iters: 700, epoch: 3 | loss: 0.0085538
+        speed: 0.2593s/iter; left time: 355.4330s
+        iters: 800, epoch: 3 | loss: 0.0062582
+        speed: 0.2592s/iter; left time: 329.4276s
+        iters: 900, epoch: 3 | loss: 0.0074504
+        speed: 0.2590s/iter; left time: 303.3019s
+        iters: 1000, epoch: 3 | loss: 0.0077162
+        speed: 0.2588s/iter; left time: 277.1578s
+Epoch: 3 cost time: 268.35s
+Epoch: 3, Steps: 1035 | Train Loss: 0.0091816 Vali Loss: 0.0047722
+Validation loss decreased (0.007604 --> 0.004772).  Saving model ...
+Updating learning rate to 0.0001
+        iters: 100, epoch: 4 | loss: 0.0065927
+        speed: 0.7440s/iter; left time: 696.3778s
+        iters: 200, epoch: 4 | loss: 0.0055399
+        speed: 0.2594s/iter; left time: 216.8533s
+        iters: 300, epoch: 4 | loss: 0.0071488
+        speed: 0.2589s/iter; left time: 190.5756s
+        iters: 400, epoch: 4 | loss: 0.0056410
+        speed: 0.2587s/iter; left time: 164.5578s
+        iters: 500, epoch: 4 | loss: 0.0074041
+        speed: 0.2585s/iter; left time: 138.5644s
+        iters: 600, epoch: 4 | loss: 0.0062078
+        speed: 0.2592s/iter; left time: 113.0140s
+        iters: 700, epoch: 4 | loss: 0.0078987
+        speed: 0.2599s/iter; left time: 87.3105s
+        iters: 800, epoch: 4 | loss: 0.0059628
+        speed: 0.2588s/iter; left time: 61.0774s
+        iters: 900, epoch: 4 | loss: 0.0054879
+        speed: 0.2587s/iter; left time: 35.1869s
+        iters: 1000, epoch: 4 | loss: 0.0047642
+        speed: 0.2586s/iter; left time: 9.3103s
+Epoch: 4 cost time: 268.39s
+Epoch: 4, Steps: 1035 | Train Loss: 0.0069930 Vali Loss: 0.0034182
+Validation loss decreased (0.004772 --> 0.003418).  Saving model ...
+Updating learning rate to 9e-05
+
+Training complete.
+>>>>>>>testing : anomaly_detection_PSM_TimesNet_AD_VAD_PSM_ftM_sl100_ll48_pl0_dm64_nh4_el2_dl1_df64_expand2_dc4_fc1_ebtimeF_dtTrue_test_0<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+test: (87841, 25)
+train: (132481, 25)
+test 87742
+test: (87841, 25)
+train: (132481, 25)
+train 132382
+============================================================
+Testing: VAD Boost Only Strategy
+  score = rec * (1 + 0.3 * max(0, vad_boost))
+  VAD only boosts, never penalizes
+Prior: λ=0.0 (hybrid)
+============================================================
+Computing scores on training set...
+Train Rec: mean=0.003393, std=0.046766
+Train VAD: mean=22.400009, std=5.291542
+Train VAD boost: mean=0.3705, max=12.8698, non-zero ratio=46.17%
+Evaluating on test set...
+Test VAD boost: mean=0.5222, max=4.3472, non-zero ratio=58.11%
+Threshold: 0.845471 (anomaly_ratio=1.0%)
+
+Score Statistics:
+  Train: mean=0.0856, std=1.2023
+  Test:  mean=0.1806, std=12.9904
+
+============================================================
+Results (β=0.3, λ=0.0, VAD Boost Only):
+  Accuracy : 0.9854
+  Precision: 0.9854
+  Recall   : 0.9616
+  F1 Score : 0.9734
+============================================================
+
+[Ablation] Reconstruction only (no VAD):
+  F1 (Rec only): 0.9732
+  VAD improvement: +0.02%
+
+============================================================
+[Debug] Prior Matrix Analysis:
+  Prior shape: (25, 25)
+  Prior mean: 0.040000
+  Prior std: 0.109107
+  Prior max correlation: 0.994558
+  Prior min correlation: 0.000000
+  Strongest correlation: Var 22 <-> Var 6 = 0.282476
+  Weakest correlation:   Var 20 <-> Var 21 = 0.000000
+  Diagonal mean (self-correlation): 0.456583
+
+============================================================
+[Debug] VAD Raw Values:
+  Train VAD raw: mean=22.400009, std=5.291542
+  Train VAD raw: min=8.734986, max=90.501205
+  Test VAD raw:  mean=23.817337, std=5.081462
+  Test VAD raw:  min=9.815172, max=45.403366
+  Train extreme VAD (>mean+10*std): 0.08%
+  Test extreme VAD (>mean+10*std):  0.00%
+
+============================================================
+[Debug] Series vs Prior (KL Divergence Analysis):
+  Sampled 640 windows: 548 normal, 92 anomaly
+
+  Prior Matrix:
+    Diagonal mean:     0.456583
+    Off-diagonal mean: 0.022642
+    Ratio (Diag/Off):  20.16x
+
+  Normal Series Matrix:
+    Diagonal mean:     0.241379
+    Off-diagonal mean: 0.031609
+    Ratio (Diag/Off):  7.64x
+
+  Anomaly Series Matrix:
+    Diagonal mean:     0.230821
+    Off-diagonal mean: 0.032049
+    Ratio (Diag/Off):  7.20x
+
+  Overall Statistics:
+    Normal Series: mean=0.040000, std=0.056106
+    Anomaly Series: mean=0.040000, std=0.058416
+
+  |Series - Prior|:
+    Normal:  0.028234
+    Anomaly: 0.026983
+    Ratio (Anomaly/Normal): 0.96x
+
+============================================================
+[Analysis] VAD Boost Effect:
+  Anomaly points VAD raw:   23.9642
+  Normal points VAD raw:    23.7610
+  Ratio (Anomaly/Normal):   1.01x
+
+  Anomaly points VAD boost: 0.5493
+  Normal points VAD boost:  0.5119
+  Ratio (Anomaly/Normal):   1.07x
+============================================================
+
+===========================================
+训练完成!
+===========================================
+
+参数说明:
+  --beta: VAD boost 权重 (默认0.3)
+  --prior_lambda: Prior融合权重 (默认0.5)
+
+融合策略说明:
+  VAD Boost Only: VAD只放大异常分数，不会降低
+  vad_boost = max(0, (vad - mean) / std)
+  score = rec * (1 + beta * vad_boost)
+
+调参建议:
+  - 无物理知识: --prior_lambda 0.0
+  - 有物理知识: --prior_lambda 0.5~0.7
+  - 完全信任物理: --prior_lambda 1.0
