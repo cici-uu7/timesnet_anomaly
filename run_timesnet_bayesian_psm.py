@@ -74,6 +74,7 @@ parser.add_argument('--lradj', type=str, default='type1', help='adjust learning 
 # GPU配置
 parser.add_argument('--use_gpu', type=bool, default=True, help='use gpu')
 parser.add_argument('--gpu', type=int, default=0, help='gpu')
+parser.add_argument('--gpu_type', type=str, default='cuda', choices=['cuda', 'mps'])
 parser.add_argument('--use_multi_gpu', action='store_true', help='use multiple gpus')
 parser.add_argument('--devices', type=str, default='0,1,2,3', help='device ids')
 

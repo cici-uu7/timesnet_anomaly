@@ -58,6 +58,7 @@ args.output_attention = False
 args.num_workers = 0
 args.use_gpu = torch.cuda.is_available()
 args.gpu = 0
+args.gpu_type = 'cuda'
 args.use_multi_gpu = False
 args.data_path = 'train.csv'
 
