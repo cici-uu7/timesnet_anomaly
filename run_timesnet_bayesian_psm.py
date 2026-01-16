@@ -56,8 +56,8 @@ parser.add_argument('--activation', type=str, default='gelu')
 parser.add_argument('--output_attention', action='store_true', help='whether to output attention')
 
 # MC Dropout配置
-parser.add_argument('--mc_samples', type=int, default=5, help='MC Dropout samples')
-parser.add_argument('--uncertainty_weight', type=float, default=0.5, help='uncertainty weight')
+parser.add_argument('--mc_samples', type=int, default=10, help='MC Dropout samples')
+parser.add_argument('--uncertainty_weight', type=float, default=0.05, help='uncertainty weight')
 parser.add_argument('--score_strategy', type=str, default='weighted',
                     choices=['weighted', 'additive', 'multiplicative'])
 parser.add_argument('--pretrained_model', type=str,
