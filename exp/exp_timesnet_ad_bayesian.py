@@ -39,6 +39,7 @@ class Exp_TimesNet_AD_Bayesian(Exp_Anomaly_Detection):
         # MC Dropout参数
         self.mc_samples = getattr(args, 'mc_samples', 5)  # 默认采样5次
         self.uncertainty_weight = getattr(args, 'uncertainty_weight', 0.5)  # 不确定性权重
+        self.pretrained_model = getattr(args, 'pretrained_model', None)  # 预训练模型路径
 
     def _build_model(self):
         """构建贝叶斯TimesNet模型"""
@@ -132,9 +133,15 @@ class Exp_TimesNet_AD_Bayesian(Exp_Anomaly_Detection):
 
         if test:
             print('Loading model...')
-            self.model.load_state_dict(
-                torch.load(os.path.join('./checkpoints/' + setting, 'checkpoint.pth'))
-            )
+            # 优先使用预训练模型路径，否则使用setting路径
+            if self.pretrained_model and os.path.exists(self.pretrained_model):
+                model_path = self.pretrained_model
+                print(f'Using pretrained model: {model_path}')
+            else:
+                model_path = os.path.join('./checkpoints/' + setting, 'checkpoint.pth')
+                print(f'Using checkpoint: {model_path}')
+
+            self.model.load_state_dict(torch.load(model_path))
 
         folder_path = './test_results/' + setting + '/'
         if not os.path.exists(folder_path):

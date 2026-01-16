@@ -58,7 +58,7 @@ parser.add_argument('--output_attention', action='store_true')
 # 训练配置
 parser.add_argument('--num_workers', type=int, default=10)
 parser.add_argument('--itr', type=int, default=1)
-parser.add_argument('--train_epochs', type=int, default=10)
+parser.add_argument('--train_epochs', type=int, default=3)
 parser.add_argument('--batch_size', type=int, default=32)
 parser.add_argument('--patience', type=int, default=3)
 parser.add_argument('--learning_rate', type=float, default=0.0001)

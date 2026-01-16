@@ -60,6 +60,9 @@ parser.add_argument('--mc_samples', type=int, default=5, help='MC Dropout sample
 parser.add_argument('--uncertainty_weight', type=float, default=0.5, help='uncertainty weight')
 parser.add_argument('--score_strategy', type=str, default='weighted',
                     choices=['weighted', 'additive', 'multiplicative'])
+parser.add_argument('--pretrained_model', type=str,
+                    default='./checkpoints/PSM_TimesNet_PSM_dropout0.1/checkpoint.pth',
+                    help='path to pretrained model checkpoint')
 
 # 训练配置
 parser.add_argument('--num_workers', type=int, default=10, help='data loader num workers')
