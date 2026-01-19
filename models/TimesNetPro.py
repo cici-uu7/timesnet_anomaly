@@ -22,6 +22,11 @@ TimesNetPro: TimesNet with Adaptive Period Attention
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import os
+import matplotlib
+
+matplotlib.use('Agg')  # 非交互后端，避免无显示环境报错
+import matplotlib.pyplot as plt
 from models.TimesNet import FFT_for_Period
 from layers.Conv_Blocks import Inception_Block_V1
 
@@ -47,7 +52,7 @@ class AdaptivePeriodAttention(nn.Module):
         # 周期特征编码器：将每个周期的特征编码为固定维度
         # 使用全局池化 + MLP 来提取周期级别的特征
         self.period_encoder = nn.Sequential(
-            nn.Linear(d_model, self.d_attn),
+            nn.Linear(d_model * 2, self.d_attn),  # max+avg 拼接 -> 2*d_model
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(self.d_attn, self.d_attn)
@@ -55,7 +60,7 @@ class AdaptivePeriodAttention(nn.Module):
         
         # Query 生成器：从输入序列生成查询向量
         # 用于判断哪些周期对当前样本更重要
-        self.query_proj = nn.Linear(d_model, self.d_attn)
+        self.query_proj = nn.Linear(d_model * 2, self.d_attn)  # 同样 max+avg 拼接
         
         # 温度参数（可学习），用于控制注意力分布的锐度
         self.temperature = nn.Parameter(torch.ones(1))
@@ -78,21 +83,20 @@ class AdaptivePeriodAttention(nn.Module):
         """
         B, T, N, K = period_features.shape
         
-        # 1. 对每个周期的特征进行编码
+        # 1. 对每个周期的特征进行编码 (Max + Avg 拼接以捕捉 spike 与趋势)
         # period_features: [B, T, N, K] -> [B, K, T, N]
         period_feat = period_features.permute(0, 3, 1, 2).contiguous()  # [B, K, T, N]
+        p_max = period_feat.max(dim=2)[0]   # [B, K, N]
+        p_avg = period_feat.mean(dim=2)     # [B, K, N]
+        period_global = torch.cat([p_max, p_avg], dim=-1)  # [B, K, 2N]
         
-        # 全局池化：提取每个周期的全局特征
-        # 对每个周期，在时间维度上进行全局平均池化
-        # [B, K, T, N] -> [B, K, N] (在 TimesNet 中，N == d_model)
-        period_global = period_feat.mean(dim=2)  # [B, K, N] 对时间维度求平均
-        
-        # 编码周期特征: [B, K, d_model] -> [B, K, d_attn]
+        # 编码周期特征: [B, K, 2N] -> [B, K, d_attn]
         period_encoded = self.period_encoder(period_global)  # [B, K, d_attn]
         
-        # 2. 从输入生成 Query
-        # 使用输入序列的全局特征作为 query
-        x_global = x_input.mean(dim=1)  # [B, N] -> 对时间维度求平均
+        # 2. 从输入生成 Query (原始输入的 Max+Avg，避免 conv 平滑掉尖峰)
+        x_max = x_input.max(dim=1)[0]  # [B, N]
+        x_avg = x_input.mean(dim=1)    # [B, N]
+        x_global = torch.cat([x_max, x_avg], dim=-1)  # [B, 2N]
         query = self.query_proj(x_global)  # [B, d_attn]
         query = query.unsqueeze(1)  # [B, 1, d_attn]
         
@@ -135,6 +139,10 @@ class TimesBlockPro(nn.Module):
         self.pred_len = configs.pred_len
         self.k = configs.top_k
         self.d_model = configs.d_model
+        # 温度超参（可选可调）；需要可学习可改为 nn.Parameter(torch.tensor(0.5))
+        self.temperature = getattr(configs, 'fft_temp', 0.5)
+        # 调试计数器（用于控制直方图保存频率）
+        self.debug_counter = 0
         
         # 2D 卷积块（与原版一致）
         self.conv = nn.Sequential(
@@ -151,31 +159,20 @@ class TimesBlockPro(nn.Module):
             d_model=configs.d_model,
             dropout=dropout_rate
         )
-        
+
     def forward(self, x):
-        """
-        Args:
-            x: [B, T, N] 输入序列
-        
-        Returns:
-            res: [B, T, N] 输出特征
-        """
         B, T, N = x.size()
 
-        # ============================================================
-        # 🧪 消融实验模式：强制退化回原版 TimesNet 逻辑
-        # 仅使用 FFT 幅度 period_weight 作为周期聚合权重
-        # ============================================================
-
-        # 1. FFT 提取周期和原始权重（幅度）
+        # 1. FFT（period_weight 为原始幅度）
         period_list, period_weight = FFT_for_Period(x, self.k)
 
-        # 2. 对每个周期进行 2D 卷积处理（与原版 TimesBlock 完全一致）
-        res = []
+        # 2. 收集每个周期的原始特征（用于 attention）与卷积输出
+        period_features = []  # [B, L, N] 列表
+        res_conv = []         # conv 处理后的 [B, L, N]
+
         for i in range(self.k):
             period = period_list[i]
-
-            # padding
+            # padding & reshape 同原版
             if (self.seq_len + self.pred_len) % period != 0:
                 length = (((self.seq_len + self.pred_len) // period) + 1) * period
                 padding = torch.zeros([B, length - (self.seq_len + self.pred_len), N]).to(x.device)
@@ -184,26 +181,29 @@ class TimesBlockPro(nn.Module):
                 length = (self.seq_len + self.pred_len)
                 out = x
 
-            # reshape: [B, T, N] -> [B, N, H, W]
             out = out.reshape(B, length // period, period, N).permute(0, 3, 1, 2).contiguous()
-            # 2D conv
+
+            # 保存原始 period 特征（使用 conv 前的张量，reshape 回时间维）
+            pre_conv = out.permute(0, 2, 3, 1).reshape(B, -1, N)[:, :(self.seq_len + self.pred_len), :]
+            period_features.append(pre_conv)  # [B, L, N]
+
+            # conv 分支
             out = self.conv(out)
-            # reshape back: [B, N, H, W] -> [B, T, N]
-            out = out.permute(0, 2, 3, 1).reshape(B, -1, N)
-            res.append(out[:, :(self.seq_len + self.pred_len), :])
+            out = out.permute(0, 2, 3, 1).reshape(B, -1, N)[:, :(self.seq_len + self.pred_len), :]
+            res_conv.append(out)
 
-        # 3. 堆叠所有周期特征（严格复刻原版聚合的张量形状）
-        # list[[B, L, N]] -> [B, K, L, N]
-        res = torch.stack(res, dim=1)
+        # 3. stack
+        res = torch.stack(res_conv, dim=1)               # [B, K, L, N]
+        period_features = torch.stack(period_features, dim=-1)  # [B, L, N, K]
 
-        # 4. 使用 FFT 幅度作为权重 (原版 TimesNet 逻辑)
-        # period_weight: [B, K] -> Softmax 归一化 -> [B, K, 1, 1]
-        weights = F.softmax(period_weight, dim=1).unsqueeze(-1).unsqueeze(-1)
+        # 4. 使用 FFT 幅度 + 自适应注意力（query 使用原始输入，保留尖峰）
+        attn_weights = self.period_attention(period_features, period_weight, x)  # [B, L, N, K]
 
-        # 5. 加权融合（dim=1 是 K 维度）: [B, K, L, N] -> [B, L, N]
-        res = torch.sum(res * weights, dim=1)
+        # 5. 应用注意力到 conv 特征（对 K 维加权求和）
+        res = res * attn_weights.permute(0, 3, 1, 2)  # [B, K, L, N]
+        res = torch.sum(res, dim=1)  # [B, L, N]
 
-        # 6. 残差连接
+        # 6. 残差
         res = res + x
 
         return res
