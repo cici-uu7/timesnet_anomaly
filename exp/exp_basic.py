@@ -4,7 +4,7 @@ from models import Autoformer, Transformer, TimesNet, Nonstationary_Transformer,
     Informer, LightTS, Reformer, ETSformer, Pyraformer, PatchTST, MICN, Crossformer, FiLM, iTransformer, \
     Koopa, TiDE, FreTS, TimeMixer, TSMixer, SegRNN, MambaSimple, TemporalFusionTransformer, SCINet, PAttn, TimeXer, \
     WPMixer, MultiPatchFormer, KANAD, MSGNet, TimeFilter, Sundial, TimeMoE, Chronos, Moirai, TiRex,\
-    TimesFM, Chronos2,TimesNet_AD
+    TimesFM, Chronos2, TimesNet_AD, TimesNetPro
 
 
 class Exp_Basic(object):
@@ -13,6 +13,7 @@ class Exp_Basic(object):
         self.model_dict = {
             'TimesNet': TimesNet,
             'TimesNet_AD': TimesNet_AD,
+            'TimesNetPro': TimesNetPro,
             'Autoformer': Autoformer,
             'Transformer': Transformer,
             'Nonstationary_Transformer': Nonstationary_Transformer,

@@ -217,6 +217,9 @@ if __name__ == '__main__':
             Exp = Exp_TimesNet_AD_V2
         elif args.model == 'TimesNet_AD_VAD':
             Exp = Exp_TimesNet_AD_VAD
+        elif args.model == 'TimesNetPro':
+            # TimesNetPro 使用标准的异常检测实验类
+            Exp = Exp_Anomaly_Detection
         else:
             Exp = Exp_Anomaly_Detection
     elif args.task_name == 'classification':

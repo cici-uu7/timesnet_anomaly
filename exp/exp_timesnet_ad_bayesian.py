@@ -162,6 +162,7 @@ class Exp_TimesNet_AD_Bayesian(Exp_Anomaly_Detection):
         print("\n[Step 1/4] Computing scores on training set...")
         train_scores = []
         train_uncertainties = []
+        train_rec_errors = []  # 直接保存重构误差
 
         with torch.no_grad():
             for i, (batch_x, _) in enumerate(train_loader):
@@ -173,15 +174,21 @@ class Exp_TimesNet_AD_Bayesian(Exp_Anomaly_Detection):
                 # 计算异常分数
                 score = self._compute_anomaly_score(mean_pred, batch_x, uncertainty, strategy)
 
+                # 纯重构误差（用于消融实验）
+                rec_error = ((mean_pred - batch_x) ** 2).mean(dim=-1)
+
                 train_scores.append(score.detach().cpu().numpy())
                 train_uncertainties.append(uncertainty.detach().cpu().numpy())
+                train_rec_errors.append(rec_error.detach().cpu().numpy())
 
         train_scores = np.concatenate(train_scores, axis=0).reshape(-1)
         train_uncertainties = np.concatenate(train_uncertainties, axis=0).reshape(-1)
+        train_rec_errors = np.concatenate(train_rec_errors, axis=0).reshape(-1)
 
         print(f"Train scores: {train_scores.shape[0]} points")
         print(f"  Score: mean={train_scores.mean():.6f}, std={train_scores.std():.6f}")
         print(f"  Uncertainty: mean={train_uncertainties.mean():.6f}, std={train_uncertainties.std():.6f}")
+        print(f"  Rec Error: mean={train_rec_errors.mean():.6f}, std={train_rec_errors.std():.6f}")
 
         # ========== 第2步：测试集推理 ==========
         print("\n[Step 2/4] Computing scores on test set...")
@@ -216,6 +223,7 @@ class Exp_TimesNet_AD_Bayesian(Exp_Anomaly_Detection):
         print(f"Test scores: {test_scores.shape[0]} points")
         print(f"  Score: mean={test_scores.mean():.6f}, std={test_scores.std():.6f}")
         print(f"  Uncertainty: mean={test_uncertainties.mean():.6f}, std={test_uncertainties.std():.6f}")
+        print(f"  Rec Error: mean={test_rec_errors.mean():.6f}, std={test_rec_errors.std():.6f}")
 
         # ========== 第3步：计算阈值 ==========
         print("\n[Step 3/4] Computing threshold...")
@@ -250,12 +258,8 @@ class Exp_TimesNet_AD_Bayesian(Exp_Anomaly_Detection):
         # ========== 消融实验：纯重构误差 ==========
         print("\n[Ablation] Reconstruction Error Only (without Uncertainty):")
 
-        # 使用纯重构误差计算阈值
-        combined_rec_errors = np.concatenate([
-            ((train_scores - self.uncertainty_weight * train_uncertainties)
-             if strategy == 'weighted' else train_scores),
-            test_rec_errors
-        ], axis=0)
+        # 使用纯重构误差计算阈值（直接使用保存的重构误差，而非反推）
+        combined_rec_errors = np.concatenate([train_rec_errors, test_rec_errors], axis=0)
         threshold_rec = np.percentile(combined_rec_errors, 100 - anomaly_ratio)
 
         pred_rec = (test_rec_errors > threshold_rec).astype(int)
