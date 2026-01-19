@@ -200,10 +200,6 @@ class TimesBlockPro(nn.Module):
         # period_weight: [B, K] -> Softmax 归一化 -> [B, K, 1, 1]
         weights = F.softmax(period_weight, dim=1).unsqueeze(-1).unsqueeze(-1)
 
-        # 调试：确认广播形状
-        # 预期 weights: [B, K, 1, 1], res: [B, K, L, N]
-        print("TimesBlockPro fusion shapes -> weights:", weights.shape, "res:", res.shape)
-
         # 5. 加权融合（dim=1 是 K 维度）: [B, K, L, N] -> [B, L, N]
         res = torch.sum(res * weights, dim=1)
 
