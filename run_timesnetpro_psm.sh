@@ -24,6 +24,7 @@ python run.py \
   --task_name anomaly_detection \
   --is_training 1 \
   --root_path ./dataset/PSM \
+  --data_path train.csv \
   --model_id PSM \
   --model TimesNetPro \
   --data PSM \
@@ -33,17 +34,17 @@ python run.py \
   --d_model 64 \
   --d_ff 64 \
   --e_layers 2 \
-  --top_k 5 \
+  --top_k 3 \
   --num_kernels 6 \
   --enc_in 25 \
   --c_out 25 \
-  --n_heads 4 \
+  --n_heads 8 \
   --anomaly_ratio 1.0 \
   --batch_size 128 \
   --learning_rate 0.0001 \
-  --train_epochs 10 \
+  --train_epochs 3 \
   --patience 5 \
-  --lradj type3 \
+  --lradj type1 \
   --dropout 0.1
 
 echo ""

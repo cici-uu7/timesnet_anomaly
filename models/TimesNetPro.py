@@ -161,16 +161,21 @@ class TimesBlockPro(nn.Module):
             res: [B, T, N] 输出特征
         """
         B, T, N = x.size()
-        
-        # 1. FFT 提取周期和权重
+
+        # ============================================================
+        # 🧪 消融实验模式：强制退化回原版 TimesNet 逻辑
+        # 仅使用 FFT 幅度 period_weight 作为周期聚合权重
+        # ============================================================
+
+        # 1. FFT 提取周期和原始权重（幅度）
         period_list, period_weight = FFT_for_Period(x, self.k)
-        
-        # 2. 对每个周期进行 2D 卷积处理
+
+        # 2. 对每个周期进行 2D 卷积处理（与原版 TimesBlock 完全一致）
         res = []
         for i in range(self.k):
             period = period_list[i]
-            
-            # Padding
+
+            # padding
             if (self.seq_len + self.pred_len) % period != 0:
                 length = (((self.seq_len + self.pred_len) // period) + 1) * period
                 padding = torch.zeros([B, length - (self.seq_len + self.pred_len), N]).to(x.device)
@@ -178,33 +183,29 @@ class TimesBlockPro(nn.Module):
             else:
                 length = (self.seq_len + self.pred_len)
                 out = x
-            
-            # Reshape to 2D: [B, T, N] -> [B, N, H, W]
+
+            # reshape: [B, T, N] -> [B, N, H, W]
             out = out.reshape(B, length // period, period, N).permute(0, 3, 1, 2).contiguous()
-            
-            # 2D Conv
+            # 2D conv
             out = self.conv(out)
-            
-            # Reshape back: [B, N, H, W] -> [B, T, N]
+            # reshape back: [B, N, H, W] -> [B, T, N]
             out = out.permute(0, 2, 3, 1).reshape(B, -1, N)
             res.append(out[:, :(self.seq_len + self.pred_len), :])
-        
-        # 3. Stack 所有周期的特征: [B, T, N, K]
-        res = torch.stack(res, dim=-1)
-        
-        # 4. 使用自适应周期注意力计算权重
-        attention_weights = self.period_attention(
-            period_features=res,  # [B, T, N, K]
-            fft_weights=period_weight,  # [B, K]
-            x_input=x  # [B, T, N]
-        )  # [B, T, N, K]
-        
-        # 5. 加权聚合
-        res = torch.sum(res * attention_weights, dim=-1)  # [B, T, N]
-        
+
+        # 3. 堆叠所有周期特征（严格复刻原版聚合的张量形状）
+        # list[[B, L, N]] -> [B, K, L, N]
+        res = torch.stack(res, dim=1)
+
+        # 4. 使用 FFT 幅度作为权重 (原版 TimesNet 逻辑)
+        # period_weight: [B, K] -> Softmax 归一化 -> [B, K, 1, 1]
+        weights = F.softmax(period_weight, dim=1).unsqueeze(-1).unsqueeze(-1)
+
+        # 5. 加权融合（dim=1 是 K 维度）: [B, K, L, N] -> [B, L, N]
+        res = torch.sum(res * weights, dim=1)
+
         # 6. 残差连接
         res = res + x
-        
+
         return res
 
 
